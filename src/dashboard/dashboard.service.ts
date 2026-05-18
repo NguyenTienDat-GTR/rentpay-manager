@@ -1,6 +1,6 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ChargeStatus, PaymentMethod, PaymentStatus, RoomStatus, TransactionClassification } from '@prisma/client';
-import dayjs from 'dayjs';
+import dayjs = require('dayjs');
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { dateRange, toMoney } from '../common/utils/list-query';
 import { PrismaService } from '../prisma/prisma.service';
