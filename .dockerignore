@@ -1,0 +1,7 @@
+node_modules
+dist
+.env.production
+.git
+.gitignore
+npm-debug.log
+coverage

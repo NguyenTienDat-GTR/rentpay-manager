@@ -1,0 +1,492 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum Role {
+  SUPER_ADMIN
+  BUSINESS_OWNER
+  STAFF
+}
+
+enum BusinessStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum BankAccountStatus {
+  ACTIVE
+  INACTIVE
+}
+
+enum BankConnectionStatus {
+  CONNECTED
+  DISCONNECTED
+  PENDING
+}
+
+enum RoomStatus {
+  AVAILABLE
+  OCCUPIED
+  MAINTENANCE
+  INACTIVE
+}
+
+enum TenantType {
+  ADULT
+  CHILD
+  OTHER
+}
+
+enum TenantStatus {
+  ACTIVE
+  LEFT
+}
+
+enum ContractStatus {
+  PENDING
+  ACTIVE
+  EXPIRED
+  TERMINATED
+}
+
+enum PaymentCycle {
+  MONTHLY
+  QUARTERLY
+  CUSTOM
+}
+
+enum OccupantRole {
+  REPRESENTATIVE
+  ROOMMATE
+}
+
+enum OccupantStatus {
+  STAYING
+  LEFT
+}
+
+enum BillingPeriodStatus {
+  OPEN
+  CLOSED
+  LOCKED
+}
+
+enum ChargeType {
+  ROOM_RENT
+  DEPOSIT
+  ELECTRICITY
+  WATER
+  PARKING
+  INTERNET
+  GARBAGE
+  CLEANING
+  DAMAGE_FEE
+  OTHER
+}
+
+enum ChargeStatus {
+  UNPAID
+  PARTIAL
+  PAID
+  OVERPAID
+  CANCELLED
+}
+
+enum PaymentMethod {
+  BANK_TRANSFER
+  CASH
+}
+
+enum PaymentStatus {
+  CONFIRMED
+  CANCELLED
+}
+
+enum TransactionType {
+  IN
+  OUT
+}
+
+enum TransactionClassification {
+  RENT_MATCHED
+  SUSPICIOUS
+  OTHER
+}
+
+enum PaymentMatchStatus {
+  AUTO_MATCHED
+  NEEDS_REVIEW
+  IGNORED
+}
+
+enum NotificationAction {
+  CREATED
+  COPIED
+  SHARED_MANUALLY
+  DOWNLOADED_QR
+  PUBLIC_LOOKUP
+  PUBLIC_QR_VIEWED
+  PUBLIC_TRANSFER_CONTENT_COPIED
+}
+
+model User {
+  id                String            @id @default(cuid())
+  fullName          String
+  phone             String            @unique
+  passwordHash      String
+  role              Role
+  businessId        String?
+  isActive          Boolean           @default(true)
+  createdAt         DateTime          @default(now())
+  updatedAt         DateTime          @updatedAt
+  business          Business?         @relation(fields: [businessId], references: [id])
+  sessions          AuthSession[]
+  auditLogs         AuditLog[]        @relation("AuditUser")
+  collectedPayments Payment[]         @relation("PaymentCollector")
+  notificationLogs  NotificationLog[] @relation("NotificationCreator")
+
+  @@index([businessId])
+  @@index([role])
+}
+
+model AuthSession {
+  id               String    @id @default(cuid())
+  userId           String
+  refreshTokenHash String
+  userAgent        String?
+  ipAddress        String?
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+  user             User      @relation(fields: [userId], references: [id])
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Business {
+  id               String            @id @default(cuid())
+  businessName     String
+  businessSlug     String            @unique
+  taxCode          String?
+  ownerName        String
+  address          String?
+  status           BusinessStatus    @default(ACTIVE)
+  createdAt        DateTime          @default(now())
+  updatedAt        DateTime          @updatedAt
+  users            User[]
+  bankAccounts     BankAccount[]
+  bankConnections  BankConnection[]
+  rooms            Room[]
+  tenants          Tenant[]
+  contracts        RentalContract[]
+  occupants        ContractOccupant[]
+  billingPeriods   BillingPeriod[]
+  charges          Charge[]
+  payments         Payment[]
+  transactions     BankTransaction[]
+  matches          PaymentMatch[]
+  notificationLogs NotificationLog[]
+  auditLogs        AuditLog[]
+
+  @@index([status])
+}
+
+model BankAccount {
+  id             String            @id @default(cuid())
+  businessId     String
+  bankName       String
+  bankCode       String
+  accountNumber  String
+  accountName    String
+  isDefault      Boolean           @default(false)
+  status         BankAccountStatus @default(ACTIVE)
+  createdAt      DateTime          @default(now())
+  updatedAt      DateTime          @updatedAt
+  business       Business          @relation(fields: [businessId], references: [id])
+  connections    BankConnection[]
+  charges        Charge[]
+  transactions   BankTransaction[]
+
+  @@index([businessId])
+  @@index([bankCode])
+}
+
+model BankConnection {
+  id                    String               @id @default(cuid())
+  businessId            String
+  bankAccountId         String
+  bankCode              String
+  provider              String
+  status                BankConnectionStatus @default(PENDING)
+  accessTokenEncrypted  String?
+  refreshTokenEncrypted String?
+  createdAt             DateTime             @default(now())
+  updatedAt             DateTime             @updatedAt
+  business              Business             @relation(fields: [businessId], references: [id])
+  bankAccount           BankAccount          @relation(fields: [bankAccountId], references: [id])
+
+  @@index([businessId])
+  @@index([bankAccountId])
+}
+
+model Room {
+  id             String             @id @default(cuid())
+  businessId     String
+  roomCode       String
+  name           String?
+  floor          String?
+  area           Decimal?           @db.Decimal(10, 2)
+  baseRentAmount Decimal            @db.Decimal(14, 2)
+  depositAmount  Decimal?           @db.Decimal(14, 2)
+  maxOccupants   Int?
+  status         RoomStatus         @default(AVAILABLE)
+  note           String?
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  business       Business           @relation(fields: [businessId], references: [id])
+  contracts      RentalContract[]
+  occupants      ContractOccupant[]
+  charges        Charge[]
+  payments       Payment[]
+  notificationLogs NotificationLog[]
+
+  @@unique([businessId, roomCode])
+  @@index([businessId, status])
+}
+
+model Tenant {
+  id                    String             @id @default(cuid())
+  businessId            String
+  fullName              String
+  phone                 String?
+  identityNumber        String?
+  dateOfBirth           DateTime?
+  permanentAddress      String?
+  tenantType            TenantType         @default(ADULT)
+  note                  String?
+  status                TenantStatus       @default(ACTIVE)
+  createdAt             DateTime           @default(now())
+  updatedAt             DateTime           @updatedAt
+  business              Business           @relation(fields: [businessId], references: [id])
+  representedContracts  RentalContract[]   @relation("RepresentativeTenant")
+  occupants             ContractOccupant[]
+  charges               Charge[]
+  payments              Payment[]
+  notificationLogs      NotificationLog[]
+
+  @@index([businessId, status])
+  @@index([phone])
+}
+
+model RentalContract {
+  id                     String             @id @default(cuid())
+  businessId             String
+  roomId                 String
+  representativeTenantId String
+  startDate              DateTime
+  endDate                DateTime?
+  rentAmount             Decimal            @db.Decimal(14, 2)
+  depositAmount          Decimal            @db.Decimal(14, 2)
+  paymentCycle           PaymentCycle       @default(MONTHLY)
+  paymentDueDay          Int
+  status                 ContractStatus     @default(PENDING)
+  note                   String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  business               Business           @relation(fields: [businessId], references: [id])
+  room                   Room               @relation(fields: [roomId], references: [id])
+  representativeTenant   Tenant             @relation("RepresentativeTenant", fields: [representativeTenantId], references: [id])
+  occupants              ContractOccupant[]
+  charges                Charge[]
+  payments               Payment[]
+
+  @@index([businessId, status])
+  @@index([roomId, status])
+}
+
+model ContractOccupant {
+  id           String         @id @default(cuid())
+  businessId   String
+  contractId   String
+  roomId       String
+  tenantId     String
+  role         OccupantRole
+  relationship String?
+  moveInDate   DateTime
+  moveOutDate  DateTime?
+  status       OccupantStatus @default(STAYING)
+  createdAt    DateTime       @default(now())
+  updatedAt    DateTime       @updatedAt
+  business     Business       @relation(fields: [businessId], references: [id])
+  contract     RentalContract @relation(fields: [contractId], references: [id])
+  room         Room           @relation(fields: [roomId], references: [id])
+  tenant       Tenant         @relation(fields: [tenantId], references: [id])
+
+  @@index([businessId, status])
+  @@index([contractId, role])
+}
+
+model BillingPeriod {
+  id        String              @id @default(cuid())
+  businessId String
+  month     Int
+  year      Int
+  startDate DateTime
+  endDate   DateTime
+  status    BillingPeriodStatus @default(OPEN)
+  createdAt DateTime            @default(now())
+  updatedAt DateTime            @updatedAt
+  business  Business            @relation(fields: [businessId], references: [id])
+  charges   Charge[]
+
+  @@unique([businessId, month, year])
+  @@index([businessId, status])
+}
+
+model Charge {
+  id              String          @id @default(cuid())
+  businessId      String
+  roomId          String
+  contractId      String?
+  payerTenantId   String?
+  billingPeriodId String?
+  bankAccountId   String
+  chargeType      ChargeType
+  title           String
+  amountDue       Decimal         @db.Decimal(14, 2)
+  amountPaid      Decimal         @default(0) @db.Decimal(14, 2)
+  dueDate         DateTime?
+  paymentCode     String          @unique
+  transferContent String
+  paymentLink     String?
+  status          ChargeStatus    @default(UNPAID)
+  createdAt       DateTime        @default(now())
+  updatedAt       DateTime        @updatedAt
+  business        Business        @relation(fields: [businessId], references: [id])
+  room            Room            @relation(fields: [roomId], references: [id])
+  contract        RentalContract? @relation(fields: [contractId], references: [id])
+  payerTenant     Tenant?         @relation(fields: [payerTenantId], references: [id])
+  billingPeriod   BillingPeriod?  @relation(fields: [billingPeriodId], references: [id])
+  bankAccount     BankAccount     @relation(fields: [bankAccountId], references: [id])
+  payments        Payment[]
+  matches         PaymentMatch[]
+  notificationLogs NotificationLog[]
+
+  @@index([businessId, status])
+  @@index([roomId])
+  @@index([contractId, billingPeriodId])
+}
+
+model Payment {
+  id                String         @id @default(cuid())
+  businessId        String
+  chargeId          String
+  roomId            String
+  contractId        String?
+  tenantId          String?
+  method            PaymentMethod
+  amount            Decimal        @db.Decimal(14, 2)
+  paidAt            DateTime
+  collectedBy       String?
+  bankTransactionId String?
+  note              String?
+  status            PaymentStatus  @default(CONFIRMED)
+  createdAt         DateTime       @default(now())
+  updatedAt         DateTime       @updatedAt
+  business          Business       @relation(fields: [businessId], references: [id])
+  charge            Charge         @relation(fields: [chargeId], references: [id])
+  room              Room           @relation(fields: [roomId], references: [id])
+  contract          RentalContract? @relation(fields: [contractId], references: [id])
+  tenant            Tenant?        @relation(fields: [tenantId], references: [id])
+  collector         User?          @relation("PaymentCollector", fields: [collectedBy], references: [id])
+  bankTransaction   BankTransaction? @relation(fields: [bankTransactionId], references: [id])
+
+  @@index([businessId, method, status])
+  @@index([chargeId])
+  @@index([paidAt])
+}
+
+model BankTransaction {
+  id              String                    @id @default(cuid())
+  businessId      String
+  bankAccountId   String
+  bankCode        String
+  accountNumber   String
+  transactionRef  String
+  amount          Decimal                   @db.Decimal(14, 2)
+  description     String
+  transactionTime DateTime
+  type            TransactionType           @default(IN)
+  classification  TransactionClassification @default(OTHER)
+  rawData         Json
+  createdAt       DateTime                  @default(now())
+  updatedAt       DateTime                  @updatedAt
+  business        Business                  @relation(fields: [businessId], references: [id])
+  bankAccount     BankAccount               @relation(fields: [bankAccountId], references: [id])
+  payments        Payment[]
+  matches         PaymentMatch[]
+
+  @@unique([bankAccountId, transactionRef])
+  @@index([businessId, classification])
+  @@index([transactionTime])
+}
+
+model PaymentMatch {
+  id          String             @id @default(cuid())
+  businessId  String
+  transactionId String
+  chargeId    String?
+  matchStatus PaymentMatchStatus
+  confidence  Int
+  reason      Json
+  createdAt   DateTime           @default(now())
+  business    Business           @relation(fields: [businessId], references: [id])
+  transaction BankTransaction    @relation(fields: [transactionId], references: [id])
+  charge      Charge?            @relation(fields: [chargeId], references: [id])
+
+  @@index([businessId, matchStatus])
+}
+
+model NotificationLog {
+  id         String             @id @default(cuid())
+  businessId String
+  chargeId   String?
+  tenantId   String?
+  roomId     String?
+  action     NotificationAction
+  createdBy  String?
+  createdAt  DateTime           @default(now())
+  metadata   Json?
+  business   Business           @relation(fields: [businessId], references: [id])
+  charge     Charge?            @relation(fields: [chargeId], references: [id])
+  tenant     Tenant?            @relation(fields: [tenantId], references: [id])
+  room       Room?              @relation(fields: [roomId], references: [id])
+  creator    User?              @relation("NotificationCreator", fields: [createdBy], references: [id])
+
+  @@index([businessId, action])
+  @@index([createdAt])
+}
+
+model AuditLog {
+  id         String   @id @default(cuid())
+  businessId String?
+  userId     String?
+  action     String
+  entity     String
+  entityId   String?
+  metadata   Json?
+  createdAt  DateTime @default(now())
+  business   Business? @relation(fields: [businessId], references: [id])
+  user       User?    @relation("AuditUser", fields: [userId], references: [id])
+
+  @@index([businessId, action])
+  @@index([entity, entityId])
+  @@index([createdAt])
+}

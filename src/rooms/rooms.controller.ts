@@ -1,0 +1,39 @@
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { RoomStatus } from '@prisma/client';
+import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
+import { RoomsService } from './rooms.service';
+
+@Controller('rooms')
+export class RoomsController {
+  constructor(private readonly rooms: RoomsService) {}
+
+  @Get()
+  list(@CurrentUser() user: AuthUser, @Query() query: any) {
+    return this.rooms.list(user, query);
+  }
+
+  @Get(':id')
+  get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.rooms.get('room', user, id);
+  }
+
+  @Post()
+  create(@CurrentUser() user: AuthUser, @Body() body: any) {
+    return this.rooms.createRoom(user, body);
+  }
+
+  @Patch(':id')
+  update(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: any) {
+    return this.rooms.updateRoom(user, id, body);
+  }
+
+  @Patch(':id/status')
+  status(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body('status') status: RoomStatus) {
+    return this.rooms.changeStatus(user, id, status);
+  }
+
+  @Delete(':id')
+  remove(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.rooms.removeRoom(user, id);
+  }
+}
