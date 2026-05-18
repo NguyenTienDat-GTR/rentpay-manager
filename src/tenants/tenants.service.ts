@@ -5,7 +5,8 @@ import { BaseCrudService } from '../common/base-crud.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 
-const PHONE_PATTERN = /^(0|\+84)[0-9]{9,10}$/;
+const PHONE_PATTERN = /^0\d{9}$/;
+const IDENTITY_NUMBER_PATTERN = /^\d{12}$/;
 const CREATE_STATUSES: readonly TenantStatus[] = [TenantStatus.ACTIVE, TenantStatus.DEPOSITED];
 const UPDATE_STATUSES: readonly TenantStatus[] = [TenantStatus.ACTIVE, TenantStatus.DEPOSITED, TenantStatus.LEFT];
 
@@ -49,9 +50,9 @@ export class TenantsService extends BaseCrudService {
     const data: Record<string, any> = {};
 
     if (body.fullName !== undefined) data.fullName = this.requiredText(body.fullName, 'Full name is required');
-    if (body.phone !== undefined) data.phone = this.optionalPhone(body.phone, 'Invalid phone');
-    if (body.identityNumber !== undefined) data.identityNumber = this.optionalText(body.identityNumber);
-    if (body.permanentAddress !== undefined) data.permanentAddress = this.optionalText(body.permanentAddress);
+    if (body.phone !== undefined || isCreate) data.phone = this.requiredPhone(body.phone, 'Phone is required', 'Invalid phone');
+    if (body.identityNumber !== undefined || isCreate) data.identityNumber = this.requiredIdentityNumber(body.identityNumber);
+    if (body.permanentAddress !== undefined || isCreate) data.permanentAddress = this.requiredText(body.permanentAddress, 'Permanent address is required');
     if (body.note !== undefined) data.note = this.optionalText(body.note);
 
     if (body.dateOfBirth !== undefined || isCreate) {
@@ -93,6 +94,19 @@ export class TenantsService extends BaseCrudService {
     if (!phone) return null;
     if (!PHONE_PATTERN.test(phone)) throw new BadRequestException(message);
     return phone;
+  }
+
+  private requiredPhone(value: unknown, requiredMessage: string, invalidMessage: string) {
+    const phone = this.optionalText(value);
+    if (!phone) throw new BadRequestException(requiredMessage);
+    if (!PHONE_PATTERN.test(phone)) throw new BadRequestException(invalidMessage);
+    return phone;
+  }
+
+  private requiredIdentityNumber(value: unknown) {
+    const identityNumber = this.requiredText(value, 'Identity number is required');
+    if (!IDENTITY_NUMBER_PATTERN.test(identityNumber)) throw new BadRequestException('Identity number must be exactly 12 digits');
+    return identityNumber;
   }
 
   private normalizeDateOfBirth(value: unknown) {

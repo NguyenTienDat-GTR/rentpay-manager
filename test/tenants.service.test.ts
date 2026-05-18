@@ -19,6 +19,17 @@ function birthDateYearsAgo(years: number) {
   return date.toISOString().slice(0, 10);
 }
 
+function validTenantBody(overrides: Record<string, any> = {}) {
+  return {
+    fullName: 'Nguyen Van A',
+    phone: '0912345678',
+    identityNumber: '012345678901',
+    dateOfBirth: birthDateYearsAgo(20),
+    permanentAddress: '123 Nguyen Trai',
+    ...overrides,
+  };
+}
+
 function makeService(prismaOverrides: Record<string, any> = {}) {
   const prisma = {
     tenant: {
@@ -37,9 +48,26 @@ describe('TenantsService', () => {
     const service = makeService();
 
     await assert.rejects(
-      () => service.createTenant(user, { fullName: 'Nguyen Van A', dateOfBirth: birthDateYearsAgo(17) }),
+      () => service.createTenant(user, validTenantBody({ dateOfBirth: birthDateYearsAgo(17) })),
       BadRequestException,
     );
+  });
+
+  it('requires phone, identity number, and permanent address during tenant creation', async () => {
+    const service = makeService();
+
+    await assert.rejects(() => service.createTenant(user, validTenantBody({ phone: '' })), BadRequestException);
+    await assert.rejects(() => service.createTenant(user, validTenantBody({ identityNumber: '' })), BadRequestException);
+    await assert.rejects(() => service.createTenant(user, validTenantBody({ permanentAddress: '' })), BadRequestException);
+  });
+
+  it('validates phone and identity number formats', async () => {
+    const service = makeService();
+
+    await assert.rejects(() => service.createTenant(user, validTenantBody({ phone: '+84912345678' })), BadRequestException);
+    await assert.rejects(() => service.createTenant(user, validTenantBody({ phone: '091234567' })), BadRequestException);
+    await assert.rejects(() => service.createTenant(user, validTenantBody({ identityNumber: '01234567890' })), BadRequestException);
+    await assert.rejects(() => service.createTenant(user, validTenantBody({ identityNumber: '01234567890A' })), BadRequestException);
   });
 
   it('creates deposited adult tenants and normalizes data from the FE form', async () => {
@@ -53,15 +81,13 @@ describe('TenantsService', () => {
       },
     });
 
-    const tenant = await service.createTenant(user, {
-      fullName: 'Nguyen Van A',
-      phone: '0912345678',
+    const tenant = await service.createTenant(user, validTenantBody({
       dateOfBirth: birthDateYearsAgo(18),
       tenantType: TenantType.CHILD,
       status: TenantStatus.DEPOSITED,
       roommateCount: 1,
       roommatePhone: '0987654321',
-    });
+    }));
 
     assert.equal(tenant.status, TenantStatus.DEPOSITED);
     assert.equal(createdData.businessId, user.businessId);
@@ -74,7 +100,7 @@ describe('TenantsService', () => {
     const service = makeService();
 
     await assert.rejects(
-      () => service.createTenant(user, { fullName: 'Nguyen Van A', dateOfBirth: birthDateYearsAgo(20), status: TenantStatus.LEFT }),
+      () => service.createTenant(user, validTenantBody({ status: TenantStatus.LEFT })),
       BadRequestException,
     );
   });
@@ -83,7 +109,7 @@ describe('TenantsService', () => {
     const service = makeService();
 
     await assert.rejects(
-      () => service.createTenant(user, { fullName: 'Nguyen Van A', dateOfBirth: birthDateYearsAgo(20), roommateCount: 1 }),
+      () => service.createTenant(user, validTenantBody({ roommateCount: 1 })),
       BadRequestException,
     );
   });
