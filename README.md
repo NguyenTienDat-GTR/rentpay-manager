@@ -1,6 +1,6 @@
 # RentPay Manager Backend
 
-Backend NestJS cho webapp quản lý nhà trọ theo `promt.txt`: PostgreSQL + Prisma, Redis cache/session support, JWT access/refresh token qua httpOnly cookie, QR nội bộ, webhook demo, realtime Socket.IO, dashboard và báo cáo Excel.
+Backend NestJS cho webapp quản lý nhà trọ và đặc biệt là quản lí các khoản thanh toán đầu vào hiệu quả hơn so với cách thủ công: PostgreSQL + Prisma, Redis cache/session support, JWT access/refresh token qua httpOnly cookie, QR nội bộ, webhook demo, realtime Socket.IO, dashboard và báo cáo Excel.
 
 ## Yêu cầu
 
