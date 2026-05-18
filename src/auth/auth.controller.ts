@@ -1,28 +1,26 @@
-import { Body, Controller, Get, Post, Req, Res, UnauthorizedException } from '@nestjs/common';
+import { Body, Controller, Get, Post, Req, Res } from '@nestjs/common';
 import { Response, Request } from 'express';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
-import { RedisService } from '../redis/redis.service';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
+import { Retryable } from '../common/decorators/retryable.decorator';
 import { AuthService } from './auth.service';
 import { LoginDto } from './dto';
 
 @Controller('auth')
 export class AuthController {
-  constructor(
-    private readonly auth: AuthService,
-    private readonly redis: RedisService,
-  ) {}
+  constructor(private readonly auth: AuthService) {}
 
   @Public()
+  @RateLimit({ limit: 10, ttlSeconds: 60, keyPrefix: 'auth:login', scope: 'ip' })
   @Post('login')
   async login(@Body() dto: LoginDto, @Req() req: Request, @Res({ passthrough: true }) res: Response) {
     const ip = req.ip ?? 'unknown';
-    const rate = await this.redis.rateLimit(`rate:login:${ip}`, 10, 60);
-    if (!rate.allowed) throw new UnauthorizedException('Too many login attempts');
     return this.auth.login(dto.phone, dto.password, { userAgent: req.headers['user-agent'], ipAddress: ip }, res);
   }
 
   @Public()
+  @RateLimit({ limit: 30, ttlSeconds: 60, keyPrefix: 'auth:refresh', scope: 'ip' })
   @Post('refresh')
   refresh(@Req() req: Request, @Res({ passthrough: true }) res: Response) {
     return this.auth.refresh(req.cookies?.refreshToken, res);
@@ -39,11 +37,13 @@ export class AuthController {
   }
 
   @Get('me')
+  @Retryable()
   me(@CurrentUser() user: AuthUser) {
     return this.auth.me(user.sub);
   }
 
   @Get('sessions')
+  @Retryable()
   sessions(@CurrentUser() user: AuthUser) {
     return this.auth.sessions(user.sub);
   }

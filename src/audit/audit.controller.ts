@@ -1,6 +1,7 @@
 import { Controller, Get, Query } from '@nestjs/common';
 import { BaseCrudService } from '../common/base-crud.service';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
+import { Retryable } from '../common/decorators/retryable.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 
 @Controller('audit-logs')
@@ -10,6 +11,7 @@ export class AuditController extends BaseCrudService {
   }
 
   @Get()
+  @Retryable()
   list(@CurrentUser() user: AuthUser, @Query() query: any) {
     return super.listItems({
       model: 'auditLog',
@@ -24,6 +26,7 @@ export class AuditController extends BaseCrudService {
   }
 
   @Get('payments')
+  @Retryable()
   paymentLogs(@CurrentUser() user: AuthUser, @Query() query: any) {
     return this.list(user, { ...query, entity: 'Payment' });
   }

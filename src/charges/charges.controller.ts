@@ -1,5 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
+import { RateLimit } from '../common/decorators/rate-limit.decorator';
+import { Retryable } from '../common/decorators/retryable.decorator';
 import { ChargesService } from './charges.service';
 
 @Controller('charges')
@@ -7,16 +9,19 @@ export class ChargesController {
   constructor(private readonly charges: ChargesService) {}
 
   @Get()
+  @Retryable()
   list(@CurrentUser() user: AuthUser, @Query() query: any) {
     return this.charges.list(user, query);
   }
 
   @Get(':id')
+  @Retryable()
   get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.charges.get('charge', user, id, { room: true, payerTenant: true, payments: true, bankAccount: true });
   }
 
   @Get(':id/qr')
+  @RateLimit({ limit: 60, ttlSeconds: 60, keyPrefix: 'charges:qr', scope: 'business-or-ip' })
   qr(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.charges.qr(user, id);
   }

@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Patch, Post, Query } from '@nestjs/common';
 import { Role } from '@prisma/client';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
+import { Retryable } from '../common/decorators/retryable.decorator';
 import { Roles } from '../common/decorators/roles.decorator';
 import { BusinessesService } from './businesses.service';
 
@@ -10,6 +11,7 @@ export class BusinessesController {
 
   @Roles(Role.SUPER_ADMIN)
   @Get('businesses')
+  @Retryable()
   list(@CurrentUser() user: AuthUser, @Query() query: any) {
     return this.businesses.list(user, query);
   }
@@ -21,6 +23,7 @@ export class BusinessesController {
   }
 
   @Get('business')
+  @Retryable()
   myBusiness(@CurrentUser() user: AuthUser) {
     return this.businesses.getMyBusiness(user);
   }

@@ -1,6 +1,7 @@
 import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { RoomStatus } from '@prisma/client';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
+import { Retryable } from '../common/decorators/retryable.decorator';
 import { RoomsService } from './rooms.service';
 
 @Controller('rooms')
@@ -8,11 +9,13 @@ export class RoomsController {
   constructor(private readonly rooms: RoomsService) {}
 
   @Get()
+  @Retryable()
   list(@CurrentUser() user: AuthUser, @Query() query: any) {
     return this.rooms.list(user, query);
   }
 
   @Get(':id')
+  @Retryable()
   get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.rooms.get('room', user, id);
   }

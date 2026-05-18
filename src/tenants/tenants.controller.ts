@@ -1,5 +1,6 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
+import { Retryable } from '../common/decorators/retryable.decorator';
 import { TenantsService } from './tenants.service';
 
 @Controller('tenants')
@@ -7,11 +8,13 @@ export class TenantsController {
   constructor(private readonly tenants: TenantsService) {}
 
   @Get()
+  @Retryable()
   list(@CurrentUser() user: AuthUser, @Query() query: any) {
     return this.tenants.list(user, query);
   }
 
   @Get(':id')
+  @Retryable()
   get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.tenants.get('tenant', user, id);
   }

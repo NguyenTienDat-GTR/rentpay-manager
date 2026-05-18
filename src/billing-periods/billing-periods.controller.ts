@@ -1,6 +1,7 @@
 import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { BillingPeriodStatus } from '@prisma/client';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
+import { Retryable } from '../common/decorators/retryable.decorator';
 import { BillingPeriodsService } from './billing-periods.service';
 
 @Controller('billing-periods')
@@ -8,6 +9,7 @@ export class BillingPeriodsController {
   constructor(private readonly periods: BillingPeriodsService) {}
 
   @Get()
+  @Retryable()
   list(@CurrentUser() user: AuthUser, @Query() query: any) {
     return this.periods.list(user, query);
   }

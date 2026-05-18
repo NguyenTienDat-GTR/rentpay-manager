@@ -24,8 +24,6 @@ export class PublicPortalService {
   }
 
   async lookup(slug: string, body: any, ip?: string) {
-    const rate = await this.redis.rateLimit(`rate:public_lookup:${slug}:${ip ?? 'unknown'}`, 30, 900);
-    if (!rate.allowed) throw new UnauthorizedException('Too many requests');
     const genericError = new BadRequestException('Không tìm thấy thông tin thanh toán phù hợp');
     const business = await this.prisma.business.findUnique({ where: { businessSlug: slug } });
     if (!business || business.status !== BusinessStatus.ACTIVE) throw genericError;

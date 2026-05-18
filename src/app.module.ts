@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
-import { APP_GUARD } from '@nestjs/core';
+import { APP_GUARD, APP_INTERCEPTOR } from '@nestjs/core';
 import { PassportModule } from '@nestjs/passport';
 import { AuthModule } from './auth/auth.module';
 import { JwtAuthGuard } from './common/guards/jwt-auth.guard';
+import { RateLimitGuard } from './common/guards/rate-limit.guard';
 import { RolesGuard } from './common/guards/roles.guard';
+import { RetryInterceptor } from './common/interceptors/retry.interceptor';
 import { PrismaModule } from './prisma/prisma.module';
 import { RedisModule } from './redis/redis.module';
 import { AuditModule } from './audit/audit.module';
@@ -53,6 +55,8 @@ import { NotificationLogsModule } from './notification-logs/notification-logs.mo
   providers: [
     { provide: APP_GUARD, useClass: JwtAuthGuard },
     { provide: APP_GUARD, useClass: RolesGuard },
+    { provide: APP_GUARD, useClass: RateLimitGuard },
+    { provide: APP_INTERCEPTOR, useClass: RetryInterceptor },
   ],
 })
 export class AppModule {}

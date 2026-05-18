@@ -6,6 +6,7 @@ import Redis from 'ioredis';
 export class RedisService implements OnModuleDestroy {
   private readonly logger = new Logger(RedisService.name);
   private readonly client?: Redis;
+  private readonly memoryRateLimits = new Map<string, { count: number; resetAt: number }>();
 
   constructor(config: ConfigService) {
     const url = config.get<string>('REDIS_URL');
@@ -75,10 +76,30 @@ export class RedisService implements OnModuleDestroy {
   }
 
   async rateLimit(key: string, limit: number, ttlSeconds: number) {
-    if (!this.client) return { allowed: true, remaining: limit };
-    const count = await this.client.incr(key);
-    if (count === 1) await this.client.expire(key, ttlSeconds);
-    return { allowed: count <= limit, remaining: Math.max(limit - count, 0) };
+    if (!this.client) return this.memoryRateLimit(key, limit, ttlSeconds);
+    try {
+      const count = await this.client.incr(key);
+      if (count === 1) await this.client.expire(key, ttlSeconds);
+      const ttl = await this.client.ttl(key);
+      const resetAt = Date.now() + Math.max(ttl, ttlSeconds) * 1000;
+      return { allowed: count <= limit, remaining: Math.max(limit - count, 0), resetAt };
+    } catch (error: any) {
+      this.logger.warn(`Redis rate limit fallback: ${error?.message ?? 'unknown error'}`);
+      return this.memoryRateLimit(key, limit, ttlSeconds);
+    }
+  }
+
+  private memoryRateLimit(key: string, limit: number, ttlSeconds: number) {
+    const now = Date.now();
+    const current = this.memoryRateLimits.get(key);
+    if (!current || current.resetAt <= now) {
+      const resetAt = now + ttlSeconds * 1000;
+      this.memoryRateLimits.set(key, { count: 1, resetAt });
+      return { allowed: true, remaining: Math.max(limit - 1, 0), resetAt };
+    }
+
+    current.count += 1;
+    return { allowed: current.count <= limit, remaining: Math.max(limit - current.count, 0), resetAt: current.resetAt };
   }
 
   async onModuleDestroy() {
