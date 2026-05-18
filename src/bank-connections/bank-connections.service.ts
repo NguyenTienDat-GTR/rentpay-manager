@@ -30,11 +30,11 @@ export class BankConnectionsService extends BaseCrudService {
         businessId: user.businessId!,
         bankAccountId: body.bankAccountId,
         bankCode: bankAccount?.bankCode ?? body.bankCode,
-        provider: body.provider ?? 'MOCK',
+        provider: body.provider ?? 'MANUAL',
         status: BankConnectionStatus.CONNECTED,
       },
     });
-    await this.audit.log({ businessId: user.businessId, userId: user.sub, action: 'CONNECT_BANK_MOCK', entity: 'BankConnection', entityId: created.id });
+    await this.audit.log({ businessId: user.businessId, userId: user.sub, action: 'CONNECT_BANK', entity: 'BankConnection', entityId: created.id });
     return created;
   }
 

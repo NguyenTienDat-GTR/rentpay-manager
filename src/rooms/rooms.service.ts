@@ -1,8 +1,9 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
-import { ContractStatus, RoomStatus } from '@prisma/client';
+import { BadRequestException, ConflictException, Injectable } from '@nestjs/common';
+import { ContractStatus, Prisma, RoomStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { BaseCrudService } from '../common/base-crud.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
+import { requireBusinessId } from '../common/utils/business-scope';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 
@@ -24,21 +25,34 @@ export class RoomsService extends BaseCrudService {
   }
 
   async createRoom(user: AuthUser, body: any) {
-    const room = await super.create('room', user, body);
+    const businessId = requireBusinessId(user, body.businessId);
+    const data = this.normalizeCreateData(body, businessId);
+    const duplicate = await this.findDuplicateRoom(businessId, data.roomCode, data.floor, body.roomCode);
+    if (duplicate) return { ...duplicate, alreadyExists: true };
+    const room = await this.createRoomRecord(data);
     await this.changed(user, 'CREATE_ROOM', room.id);
     return room;
   }
 
   async updateRoom(user: AuthUser, id: string, body: any) {
-    const room = await super.update('room', user, id, body);
+    const current = await this.get('room', user, id);
+    const data = this.normalizeUpdateData(body, current);
+    await this.assertAllowedStatusChange(current, data.status);
+    if (data.roomCode && data.roomCode !== current.roomCode) {
+      const duplicate = await this.findDuplicateRoom(current.businessId, data.roomCode, data.floor ?? current.floor, body.roomCode ?? current.roomCode, id);
+      if (duplicate) throw new ConflictException('Room code already exists in this floor/area');
+    }
+    const room = await this.prisma.room.update({ where: { id }, data });
     await this.changed(user, 'UPDATE_ROOM', id);
     return room;
   }
 
   async removeRoom(user: AuthUser, id: string) {
+    const room = await this.get('room', user, id);
+    if (room.status === RoomStatus.OCCUPIED) throw new BadRequestException('Cannot delete an occupied room');
     const activeContract = await this.prisma.rentalContract.findFirst({ where: { roomId: id, status: ContractStatus.ACTIVE } });
     if (activeContract) throw new BadRequestException('Cannot delete room with ACTIVE contract');
-    const room = await super.remove('room', user, id);
+    await this.prisma.room.delete({ where: { id } });
     await this.changed(user, 'DELETE_ROOM', id);
     return room;
   }
@@ -51,4 +65,104 @@ export class RoomsService extends BaseCrudService {
     if (user.businessId) await this.redis.del(`dashboard:${user.businessId}:*`);
     await this.audit.log({ businessId: user.businessId, userId: user.sub, action, entity: 'Room', entityId: id });
   }
+
+  private normalizeCreateData(body: any, businessId: string) {
+    this.assertValidRoomOccupancy(body.maxOccupants);
+    this.assertRoomStatusCanBeSetByRoomApi(body.status);
+    return {
+      businessId,
+      roomCode: buildRoomCode(body.roomCode, body.floor),
+      name: body.name,
+      floor: trimOptional(body.floor),
+      area: body.area,
+      baseRentAmount: body.baseRentAmount,
+      depositAmount: body.depositAmount,
+      maxOccupants: body.maxOccupants == null || body.maxOccupants === '' ? 2 : Number(body.maxOccupants),
+      status: body.status ?? RoomStatus.AVAILABLE,
+      note: body.note,
+    };
+  }
+
+  private normalizeUpdateData(body: any, current: any) {
+    this.assertValidRoomOccupancy(body.maxOccupants);
+    this.assertRoomStatusCanBeSetByRoomApi(body.status);
+    const data = { ...body };
+    delete data.businessId;
+    const nextFloor = body.floor !== undefined ? body.floor : current.floor;
+    if (body.roomCode !== undefined || body.floor !== undefined) data.roomCode = buildRoomCode(body.roomCode ?? current.roomCode, nextFloor);
+    if (body.floor !== undefined) data.floor = trimOptional(body.floor);
+    if (body.maxOccupants !== undefined && body.maxOccupants !== '') data.maxOccupants = Number(body.maxOccupants);
+    if (body.maxOccupants === '') delete data.maxOccupants;
+    return data;
+  }
+
+  private assertRoomStatusCanBeSetByRoomApi(status?: RoomStatus) {
+    if (status === RoomStatus.OCCUPIED) throw new BadRequestException('Occupied status can only be set by an active rental contract');
+  }
+
+  private async assertAllowedStatusChange(room: any, nextStatus?: RoomStatus) {
+    if (!nextStatus || nextStatus === room.status) return;
+    if (room.status !== RoomStatus.OCCUPIED && nextStatus !== RoomStatus.OCCUPIED) return;
+    const activeContract = await this.prisma.rentalContract.findFirst({ where: { roomId: room.id, status: ContractStatus.ACTIVE } });
+    if (room.status === RoomStatus.OCCUPIED || activeContract) {
+      throw new BadRequestException('Cannot change an occupied room to maintenance or inactive');
+    }
+  }
+
+  private assertValidRoomOccupancy(value: unknown) {
+    if (value === undefined || value === null || value === '') return;
+    const numberValue = Number(value);
+    if (!Number.isInteger(numberValue) || numberValue < 1 || numberValue > 10) {
+      throw new BadRequestException('maxOccupants must be an integer from 1 to 10');
+    }
+  }
+
+  private async findDuplicateRoom(businessId: string, roomCode: string, floor: string | null, rawRoomCode: unknown, exceptId?: string) {
+    const rawCode = normalizeCodePart(rawRoomCode);
+    return this.prisma.room.findFirst({
+      where: {
+        businessId,
+        ...(exceptId ? { id: { not: exceptId } } : {}),
+        OR: [
+          { roomCode },
+          ...(floor && rawCode ? [{ floor, roomCode: rawCode }] : []),
+        ],
+      },
+    });
+  }
+
+  private async createRoomRecord(data: any) {
+    try {
+      return await this.prisma.room.create({ data });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+        const duplicate = await this.prisma.room.findFirst({ where: { businessId: data.businessId, roomCode: data.roomCode } });
+        if (duplicate) return { ...duplicate, alreadyExists: true };
+      }
+      throw error;
+    }
+  }
+}
+
+function buildRoomCode(roomCode: unknown, floor: unknown) {
+  const roomPart = normalizeCodePart(roomCode);
+  const floorPart = normalizeCodePart(floor);
+  if (!roomPart) throw new BadRequestException('roomCode is required');
+  if (!floorPart) throw new BadRequestException('floor or area is required');
+  if (roomPart === floorPart || roomPart.startsWith(`${floorPart}-`)) return roomPart;
+  return `${floorPart}-${roomPart}`;
+}
+
+function normalizeCodePart(value: unknown) {
+  return String(value ?? '')
+    .trim()
+    .toUpperCase()
+    .replace(/[\s_/]+/g, '-')
+    .replace(/-+/g, '-')
+    .replace(/^-|-$/g, '');
+}
+
+function trimOptional(value: unknown) {
+  const trimmed = String(value ?? '').trim();
+  return trimmed || null;
 }

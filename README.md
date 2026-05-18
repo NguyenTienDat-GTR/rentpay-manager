@@ -15,7 +15,6 @@ cp .env.example .env
 npm install
 npm run prisma:generate
 npm run prisma:migrate -- --name init
-npm run seed
 npm run start:dev
 ```
 
@@ -31,42 +30,26 @@ Lần đầu tạo database:
 
 ```bash
 docker compose exec app npx prisma migrate dev --name init
-docker compose exec app npm run seed
 ```
-
-## Tài khoản seed
-
-- SUPER_ADMIN: `0900000000` / `123456`
-- BUSINESS_OWNER: `0901000000` / `123456`
-
-## Demo flow backend
-
-1. `POST /api/auth/login` với phone `0901000000`, password `123456`.
-2. `GET /api/billing-periods` lấy kỳ `05/2026`.
-3. `POST /api/billing-periods/:id/generate-monthly-rent`.
-4. `GET /api/charges` xem charge và `paymentCode`.
-5. `GET /api/charges/:id/qr` sinh QR động từ charge + bank account, không lưu `qrBase64`.
-6. `POST /api/webhook-demo` với mô tả `THUE RTP-xxxxxx` để auto-match.
-7. `POST /api/payments/cash` để ghi nhận tiền mặt.
 
 ## Public payment portal API
 
-- `GET /api/public/pay/hkd-nha-tro-minh-an`
-- `POST /api/public/pay/hkd-nha-tro-minh-an/lookup`
+- `GET /api/public/pay/:businessSlug`
+- `POST /api/public/pay/:businessSlug/lookup`
 
 Body:
 
 ```json
 {
-  "roomCode": "P101",
-  "representativePhone": "0901000001"
+  "roomCode": "<room-code>",
+  "representativePhone": "<representative-phone>"
 }
 ```
 
 API trả về `portalAccessToken`; dùng token này ở header `X-Portal-Access-Token` khi gọi:
 
 ```http
-GET /api/public/pay/hkd-nha-tro-minh-an/charges/:chargeId/qr
+GET /api/public/pay/:businessSlug/charges/:chargeId/qr
 ```
 
 ## Security notes

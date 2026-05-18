@@ -1,0 +1,5 @@
+ALTER TYPE "TenantStatus" ADD VALUE 'DEPOSITED';
+
+ALTER TABLE "Tenant"
+ADD COLUMN "roommateCount" INTEGER NOT NULL DEFAULT 0,
+ADD COLUMN "roommatePhone" TEXT;
