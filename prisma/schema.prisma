@@ -63,6 +63,7 @@ enum OccupantType {
 }
 
 enum OccupantStatus {
+  DEPOSITED
   STAYING
   LEFT
 }
@@ -183,6 +184,7 @@ model Business {
   rooms            Room[]
   tenants          Tenant[]
   contracts        RentalContract[]
+  contractRooms    RentalContractRoom[]
   occupants        ContractOccupant[]
   billingPeriods   BillingPeriod[]
   charges          Charge[]
@@ -250,6 +252,7 @@ model Room {
   updatedAt      DateTime           @updatedAt
   business       Business           @relation(fields: [businessId], references: [id])
   contracts      RentalContract[]
+  contractRooms  RentalContractRoom[]
   occupants      ContractOccupant[]
   charges        Charge[]
   payments       Payment[]
@@ -299,12 +302,28 @@ model RentalContract {
   business               Business           @relation(fields: [businessId], references: [id])
   room                   Room               @relation(fields: [roomId], references: [id])
   representativeTenant   Tenant             @relation("RepresentativeTenant", fields: [representativeTenantId], references: [id])
+  contractRooms          RentalContractRoom[]
   occupants              ContractOccupant[]
   charges                Charge[]
   payments               Payment[]
 
   @@index([businessId, status])
   @@index([roomId, status])
+}
+
+model RentalContractRoom {
+  id         String         @id @default(cuid())
+  businessId String
+  contractId String
+  roomId     String
+  createdAt  DateTime       @default(now())
+  business   Business       @relation(fields: [businessId], references: [id])
+  contract   RentalContract @relation(fields: [contractId], references: [id])
+  room       Room           @relation(fields: [roomId], references: [id])
+
+  @@unique([contractId, roomId])
+  @@index([businessId])
+  @@index([roomId])
 }
 
 model ContractOccupant {
@@ -321,7 +340,7 @@ model ContractOccupant {
   relationship String?
   moveInDate   DateTime
   moveOutDate  DateTime?
-  status       OccupantStatus @default(STAYING)
+  status       OccupantStatus @default(DEPOSITED)
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt
   business     Business       @relation(fields: [businessId], references: [id])

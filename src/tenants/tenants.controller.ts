@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
 import { Retryable } from '../common/decorators/retryable.decorator';
 import { TenantsService } from './tenants.service';
@@ -20,8 +20,8 @@ export class TenantsController {
   }
 
   @Post()
-  create(@CurrentUser() user: AuthUser, @Body() body: any) {
-    return this.tenants.createTenant(user, body);
+  create(@CurrentUser() _user: AuthUser, @Body() _body: any) {
+    throw new BadRequestException('Tenants must be created from rental contracts');
   }
 
   @Patch(':id')
