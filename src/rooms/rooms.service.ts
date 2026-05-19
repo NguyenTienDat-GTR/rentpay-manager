@@ -4,6 +4,7 @@ import { AuditService } from '../audit/audit.service';
 import { BaseCrudService } from '../common/base-crud.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { requireBusinessId } from '../common/utils/business-scope';
+import { orderBy, pagination } from '../common/utils/list-query';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 
@@ -14,6 +15,7 @@ export class RoomsService extends BaseCrudService {
   }
 
   list(user: AuthUser, query: any) {
+    if (query.availableForContract === 'true' || query.availableForContract === true) return this.listAvailableForContract(user, query);
     return super.listItems({
       model: 'room',
       user,
@@ -22,6 +24,41 @@ export class RoomsService extends BaseCrudService {
       filterFields: ['status', 'floor'],
       sortFields: ['roomCode', 'baseRentAmount', 'area', 'status', 'currentOccupantCount', 'createdAt'],
     });
+  }
+
+  private async listAvailableForContract(user: AuthUser, query: any) {
+    const businessId = requireBusinessId(user);
+    const { page, take, skip } = pagination(query);
+    const where: Prisma.RoomWhereInput = {
+      businessId,
+      status: RoomStatus.AVAILABLE,
+      contractRooms: {
+        none: {
+          contract: { status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] } },
+        },
+      },
+      ...(query.floor ? { floor: String(query.floor) } : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { roomCode: containsInsensitive(query.search) },
+              { name: containsInsensitive(query.search) },
+              { floor: containsInsensitive(query.search) },
+              { note: containsInsensitive(query.search) },
+            ],
+          }
+        : {}),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.room.findMany({
+        where,
+        skip,
+        take,
+        orderBy: orderBy(query, ['roomCode', 'baseRentAmount', 'area', 'status', 'currentOccupantCount', 'createdAt'], 'roomCode'),
+      }),
+      this.prisma.room.count({ where }),
+    ]);
+    return { items, meta: { page, take, total, pages: Math.ceil(total / take) } };
   }
 
   async createRoom(user: AuthUser, body: any) {
@@ -50,8 +87,8 @@ export class RoomsService extends BaseCrudService {
   async removeRoom(user: AuthUser, id: string) {
     const room = await this.get('room', user, id);
     if (room.status === RoomStatus.OCCUPIED) throw new BadRequestException('Cannot delete an occupied room');
-    const activeContract = await this.prisma.rentalContract.findFirst({ where: { roomId: id, status: ContractStatus.ACTIVE } });
-    if (activeContract) throw new BadRequestException('Cannot delete room with ACTIVE contract');
+    const activeContract = await this.findReservedContractForRoom(id);
+    if (activeContract) throw new BadRequestException('Cannot delete room with PENDING or ACTIVE contract');
     await this.prisma.room.delete({ where: { id } });
     await this.changed(user, 'DELETE_ROOM', id);
     return room;
@@ -104,7 +141,7 @@ export class RoomsService extends BaseCrudService {
   private async assertAllowedStatusChange(room: any, nextStatus?: RoomStatus) {
     if (!nextStatus || nextStatus === room.status) return;
     if (room.status !== RoomStatus.OCCUPIED && nextStatus !== RoomStatus.OCCUPIED) return;
-    const activeContract = await this.prisma.rentalContract.findFirst({ where: { roomId: room.id, status: ContractStatus.ACTIVE } });
+    const activeContract = await this.findReservedContractForRoom(room.id);
     if (room.status === RoomStatus.OCCUPIED || activeContract) {
       throw new BadRequestException('Cannot change an occupied room to maintenance or inactive');
     }
@@ -143,6 +180,15 @@ export class RoomsService extends BaseCrudService {
       throw error;
     }
   }
+
+  private async findReservedContractForRoom(roomId: string) {
+    if ((this.prisma as any).rentalContractRoom?.findFirst) {
+      return (this.prisma as any).rentalContractRoom.findFirst({
+        where: { roomId, contract: { status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] } } },
+      });
+    }
+    return this.prisma.rentalContract.findFirst({ where: { roomId, status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] } } });
+  }
 }
 
 function buildRoomCode(roomCode: unknown, floor: unknown) {
@@ -166,4 +212,8 @@ function normalizeCodePart(value: unknown) {
 function trimOptional(value: unknown) {
   const trimmed = String(value ?? '').trim();
   return trimmed || null;
+}
+
+function containsInsensitive(value: unknown) {
+  return { contains: String(value), mode: Prisma.QueryMode.insensitive };
 }

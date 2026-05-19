@@ -1,0 +1,2 @@
+ALTER TABLE "ContractOccupant"
+ALTER COLUMN "status" SET DEFAULT 'DEPOSITED';

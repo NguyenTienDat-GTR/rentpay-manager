@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { BadRequestException, Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
 import { Retryable } from '../common/decorators/retryable.decorator';
 import { ContractsService } from './contracts.service';
@@ -16,7 +16,7 @@ export class ContractsController {
   @Get(':id')
   @Retryable()
   get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.contracts.get('rentalContract', user, id, { room: true, representativeTenant: true, occupants: true });
+    return this.contracts.getContract(user, id);
   }
 
   @Post()
@@ -25,8 +25,8 @@ export class ContractsController {
   }
 
   @Patch(':id')
-  update(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: any) {
-    return this.contracts.update('rentalContract', user, id, body);
+  update(@CurrentUser() _user: AuthUser, @Param('id') _id: string, @Body() _body: any) {
+    throw new BadRequestException('Rental contracts cannot be edited directly');
   }
 
   @Patch(':id/activate')

@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { ChargeStatus, PaymentMethod, PaymentStatus, RoomStatus, TransactionClassification } from '@prisma/client';
+import { ChargeStatus, ContractStatus, OccupantStatus, PaymentMethod, PaymentStatus, RoomStatus, TransactionClassification } from '@prisma/client';
 import dayjs = require('dayjs');
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { dateRange, toMoney } from '../common/utils/list-query';
@@ -19,10 +19,12 @@ export class DashboardService {
 
     const chargeWhere = { businessId: user.businessId, ...(range ? { createdAt: range } : {}) };
     const paymentWhere = { businessId: user.businessId, status: PaymentStatus.CONFIRMED, ...(range ? { paidAt: range } : {}) };
-    const [rooms, occupants, activeContracts, chargeAgg, paymentAgg, cashAgg, bankAgg, suspiciousCount, otherCount, recentTransactions, debtByRoom] =
+    const effectiveContractWhere = { businessId: user.businessId, status: ContractStatus.ACTIVE, startDate: { lt: addDays(startOfLocalDay(new Date()), 1) } };
+    const [rooms, representativeContracts, occupants, activeContracts, chargeAgg, paymentAgg, cashAgg, bankAgg, suspiciousCount, otherCount, recentTransactions, debtByRoom] =
       await Promise.all([
         this.prisma.room.groupBy({ by: ['status'], where: { businessId: user.businessId }, _count: true }),
-        this.prisma.contractOccupant.count({ where: { businessId: user.businessId, status: 'STAYING' } }),
+        this.prisma.rentalContract.findMany({ where: effectiveContractWhere, select: { representativeTenantId: true } }),
+        this.prisma.contractOccupant.count({ where: { businessId: user.businessId, status: OccupantStatus.STAYING, contract: effectiveContractWhere } }),
         this.prisma.rentalContract.count({ where: { businessId: user.businessId, status: 'ACTIVE' } }),
         this.prisma.charge.aggregate({ where: chargeWhere, _sum: { amountDue: true, amountPaid: true }, _count: true }),
         this.prisma.payment.aggregate({ where: paymentWhere, _sum: { amount: true }, _count: true }),
@@ -35,6 +37,7 @@ export class DashboardService {
       ]);
 
     const roomCounts = Object.fromEntries(rooms.map((r) => [r.status, r._count]));
+    const representativeCount = new Set(representativeContracts.map((contract) => contract.representativeTenantId)).size;
     const overdueCharges = await this.prisma.charge.findMany({
       where: { businessId: user.businessId, dueDate: { lt: new Date() }, status: { in: [ChargeStatus.UNPAID, ChargeStatus.PARTIAL] } },
       include: { room: true },
@@ -45,7 +48,7 @@ export class DashboardService {
       occupiedRooms: roomCounts[RoomStatus.OCCUPIED] ?? 0,
       availableRooms: roomCounts[RoomStatus.AVAILABLE] ?? 0,
       maintenanceRooms: roomCounts[RoomStatus.MAINTENANCE] ?? 0,
-      totalCurrentOccupants: occupants,
+      totalCurrentOccupants: representativeCount + occupants,
       activeContracts,
       totalDue: toMoney(chargeAgg._sum.amountDue),
       totalCollected: toMoney(paymentAgg._sum.amount),
@@ -83,4 +86,14 @@ export function resolveDateRange(query: any) {
     return { gte: base.startOf('month').toDate(), lte: base.endOf('month').toDate() };
   }
   return undefined;
+}
+
+function startOfLocalDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }

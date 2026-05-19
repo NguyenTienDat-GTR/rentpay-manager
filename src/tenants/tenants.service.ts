@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { TenantStatus } from '@prisma/client';
+import { ContractStatus, OccupantStatus, TenantStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { BaseCrudService } from '../common/base-crud.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
@@ -29,8 +29,9 @@ export class TenantsService extends BaseCrudService {
     super(prisma);
   }
 
-  list(user: AuthUser, query: any) {
-    return super.listItems({
+  async list(user: AuthUser, query: any) {
+    await this.syncContractDrivenStatuses(user);
+    const result = await super.listItems({
       model: 'tenant',
       user,
       query,
@@ -39,10 +40,44 @@ export class TenantsService extends BaseCrudService {
       sortFields: ['fullName', 'phone', 'createdAt'],
       select: TENANT_SELECT,
     });
+    const ids = result.items.map((item: any) => item.id).filter(Boolean);
+    if (!ids.length) return result;
+    const contracts = await this.prisma.rentalContract.findMany({
+      where: {
+        businessId: this.requireBusinessId(user),
+        representativeTenantId: { in: ids },
+        status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] },
+      },
+      select: {
+        representativeTenantId: true,
+        occupants: { where: { status: { not: OccupantStatus.LEFT } }, select: { id: true } },
+      },
+    });
+    const roommateCounts = new Map<string, number>();
+    for (const contract of contracts) {
+      roommateCounts.set(contract.representativeTenantId, (roommateCounts.get(contract.representativeTenantId) ?? 0) + contract.occupants.length);
+    }
+    return {
+      ...result,
+      items: result.items.map((item: any) => ({ ...item, roommateCount: roommateCounts.get(item.id) ?? 0 })),
+    };
   }
 
-  getTenant(user: AuthUser, id: string) {
-    return this.get('tenant', user, id, undefined, true, TENANT_SELECT);
+  async getTenant(user: AuthUser, id: string) {
+    await this.syncContractDrivenStatuses(user);
+    const tenant = await this.get('tenant', user, id, undefined, true, TENANT_SELECT);
+    if (!(this.prisma as any).contractOccupant?.count) return tenant;
+    const roommateCount = await this.prisma.contractOccupant.count({
+      where: {
+        contract: {
+          businessId: this.requireBusinessId(user),
+          representativeTenantId: id,
+          status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] },
+        },
+        status: { not: OccupantStatus.LEFT },
+      },
+    });
+    return { ...tenant, roommateCount };
   }
 
   async createTenant(user: AuthUser, body: any) {
@@ -128,8 +163,67 @@ export class TenantsService extends BaseCrudService {
     if (!user.businessId) throw new BadRequestException('Business scope is required');
     return user.businessId;
   }
+
+  private async syncContractDrivenStatuses(user: AuthUser) {
+    if (!(this.prisma as any).rentalContract?.findMany || !(this.prisma as any).contractOccupant?.updateMany) return;
+    const businessId = this.requireBusinessId(user);
+    const now = new Date();
+    const tomorrow = addDays(startOfLocalDay(now), 1);
+    const effectiveContracts = await this.prisma.rentalContract.findMany({
+      where: { businessId, status: ContractStatus.ACTIVE, startDate: { lt: tomorrow } },
+      select: { id: true, representativeTenantId: true },
+    });
+    const effectiveTenantIds = Array.from(new Set(effectiveContracts.map((contract) => contract.representativeTenantId)));
+    const effectiveContractIds = effectiveContracts.map((contract) => contract.id);
+    if (effectiveTenantIds.length) {
+      await this.prisma.tenant.updateMany({
+        where: { businessId, id: { in: effectiveTenantIds }, status: { not: TenantStatus.STAYING } },
+        data: { status: TenantStatus.STAYING },
+      });
+    }
+    if (effectiveContractIds.length) {
+      await this.prisma.contractOccupant.updateMany({
+        where: { businessId, contractId: { in: effectiveContractIds }, status: OccupantStatus.DEPOSITED },
+        data: { status: OccupantStatus.STAYING },
+      });
+    }
+
+    const reservedContracts = await this.prisma.rentalContract.findMany({
+      where: {
+        businessId,
+        OR: [
+          { status: ContractStatus.PENDING },
+          { status: ContractStatus.ACTIVE, startDate: { gte: tomorrow } },
+        ],
+      },
+      select: { id: true, representativeTenantId: true },
+    });
+    for (const contract of reservedContracts) {
+      const hasEffectiveContract = effectiveTenantIds.includes(contract.representativeTenantId);
+      if (!hasEffectiveContract) {
+        await this.prisma.tenant.updateMany({
+          where: { businessId, id: contract.representativeTenantId, status: TenantStatus.STAYING },
+          data: { status: TenantStatus.DEPOSITED },
+        });
+      }
+      await this.prisma.contractOccupant.updateMany({
+        where: { businessId, contractId: contract.id, status: OccupantStatus.STAYING },
+        data: { status: OccupantStatus.DEPOSITED },
+      });
+    }
+  }
 }
 
 function isAtLeastAgeByYear(date: Date, age: number) {
   return new Date().getFullYear() - date.getFullYear() >= age;
+}
+
+function startOfLocalDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
