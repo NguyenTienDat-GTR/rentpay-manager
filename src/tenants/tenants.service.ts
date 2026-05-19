@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { TenantStatus, TenantType } from '@prisma/client';
+import { TenantStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { BaseCrudService } from '../common/base-crud.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
@@ -7,8 +7,21 @@ import { PrismaService } from '../prisma/prisma.service';
 
 const PHONE_PATTERN = /^0\d{9}$/;
 const IDENTITY_NUMBER_PATTERN = /^\d{12}$/;
-const CREATE_STATUSES: readonly TenantStatus[] = [TenantStatus.ACTIVE, TenantStatus.DEPOSITED];
-const UPDATE_STATUSES: readonly TenantStatus[] = [TenantStatus.ACTIVE, TenantStatus.DEPOSITED, TenantStatus.LEFT];
+const CREATE_STATUSES: readonly TenantStatus[] = [TenantStatus.DEPOSITED, TenantStatus.STAYING];
+const UPDATE_STATUSES: readonly TenantStatus[] = [TenantStatus.DEPOSITED, TenantStatus.STAYING, TenantStatus.LEFT];
+const TENANT_SELECT = {
+  id: true,
+  businessId: true,
+  fullName: true,
+  phone: true,
+  identityNumber: true,
+  dateOfBirth: true,
+  permanentAddress: true,
+  note: true,
+  status: true,
+  createdAt: true,
+  updatedAt: true,
+};
 
 @Injectable()
 export class TenantsService extends BaseCrudService {
@@ -22,22 +35,27 @@ export class TenantsService extends BaseCrudService {
       user,
       query,
       searchFields: ['fullName', 'phone', 'identityNumber', 'permanentAddress'],
-      filterFields: ['tenantType', 'status'],
+      filterFields: ['status'],
       sortFields: ['fullName', 'phone', 'createdAt'],
+      select: TENANT_SELECT,
     });
+  }
+
+  getTenant(user: AuthUser, id: string) {
+    return this.get('tenant', user, id, undefined, true, TENANT_SELECT);
   }
 
   async createTenant(user: AuthUser, body: any) {
     const data = this.normalizeTenantPayload(body, true);
-    const tenant = await this.prisma.tenant.create({ data: { ...data, businessId: this.requireBusinessId(user) } as any });
+    const tenant = await this.prisma.tenant.create({ data: { ...data, businessId: this.requireBusinessId(user) } as any, select: TENANT_SELECT });
     await this.audit.log({ businessId: user.businessId, userId: user.sub, action: 'CREATE_TENANT', entity: 'Tenant', entityId: tenant.id });
     return tenant;
   }
 
   async updateTenant(user: AuthUser, id: string, body: any) {
-    const existing = await this.get('tenant', user, id);
+    const existing = await this.getTenant(user, id);
     const data = this.normalizeTenantPayload(body, false, existing);
-    const tenant = await this.prisma.tenant.update({ where: { id }, data });
+    const tenant = await this.prisma.tenant.update({ where: { id }, data, select: TENANT_SELECT });
     await this.audit.log({ businessId: user.businessId, userId: user.sub, action: 'UPDATE_TENANT', entity: 'Tenant', entityId: id });
     return tenant;
   }
@@ -46,34 +64,20 @@ export class TenantsService extends BaseCrudService {
     return this.updateTenant(user, id, { status: TenantStatus.LEFT });
   }
 
-  private normalizeTenantPayload(body: Record<string, any>, isCreate: boolean, existing?: Record<string, any>) {
+  private normalizeTenantPayload(body: Record<string, any>, isCreate: boolean, _existing?: Record<string, any>) {
     const data: Record<string, any> = {};
 
     if (body.fullName !== undefined) data.fullName = this.requiredText(body.fullName, 'Full name is required');
     if (body.phone !== undefined || isCreate) data.phone = this.requiredPhone(body.phone, 'Phone is required', 'Invalid phone');
     if (body.identityNumber !== undefined || isCreate) data.identityNumber = this.requiredIdentityNumber(body.identityNumber);
     if (body.permanentAddress !== undefined || isCreate) data.permanentAddress = this.requiredText(body.permanentAddress, 'Permanent address is required');
-    if (body.note !== undefined) data.note = this.optionalText(body.note);
+    if (body.note !== undefined) data.note = this.optionalText(body.note) ?? null;
+    if (body.dateOfBirth !== undefined) data.dateOfBirth = this.normalizeDateOfBirth(body.dateOfBirth);
 
-    if (body.dateOfBirth !== undefined || isCreate) {
-      data.dateOfBirth = this.normalizeDateOfBirth(body.dateOfBirth);
-    }
-
-    if (body.roommateCount !== undefined || isCreate) {
-      data.roommateCount = this.normalizeRoommateCount(body.roommateCount ?? 0);
-    }
-    const roommateCount = data.roommateCount ?? (body.roommateCount === undefined ? undefined : this.normalizeRoommateCount(body.roommateCount));
-    if (body.roommatePhone !== undefined) data.roommatePhone = this.optionalPhone(body.roommatePhone, 'Invalid roommate phone');
-    const effectiveRoommatePhone = body.roommatePhone !== undefined ? data.roommatePhone : existing?.roommatePhone;
-    if ((roommateCount ?? 0) > 0 && !this.optionalText(effectiveRoommatePhone)) {
-      throw new BadRequestException('Roommate phone is required when roommate count is greater than 0');
-    }
-
-    const status = body.status ?? (isCreate ? TenantStatus.ACTIVE : undefined);
+    const status = body.status ?? (isCreate ? TenantStatus.DEPOSITED : undefined);
     if (status !== undefined) data.status = this.normalizeStatus(status, isCreate);
 
     if (isCreate && !data.fullName) throw new BadRequestException('Full name is required');
-    data.tenantType = TenantType.ADULT;
     return data;
   }
 
@@ -87,13 +91,6 @@ export class TenantsService extends BaseCrudService {
     if (value === undefined || value === null) return undefined;
     const text = String(value).trim();
     return text || undefined;
-  }
-
-  private optionalPhone(value: unknown, message: string) {
-    const phone = this.optionalText(value);
-    if (!phone) return null;
-    if (!PHONE_PATTERN.test(phone)) throw new BadRequestException(message);
-    return phone;
   }
 
   private requiredPhone(value: unknown, requiredMessage: string, invalidMessage: string) {
@@ -110,26 +107,21 @@ export class TenantsService extends BaseCrudService {
   }
 
   private normalizeDateOfBirth(value: unknown) {
-    const text = this.requiredText(value, 'Date of birth is required');
-    const date = new Date(text);
+    const text = this.optionalText(value);
+    if (!text) return null;
+    const date = /^\d{4}-\d{2}-\d{2}$/.test(text) ? new Date(`${text}T00:00:00.000Z`) : new Date(text);
     if (Number.isNaN(date.getTime())) throw new BadRequestException('Invalid date of birth');
-    if (!isAtLeastAge(date, 18)) throw new BadRequestException('Tenant must be at least 18 years old');
+    if (!isAtLeastAgeByYear(date, 18)) throw new BadRequestException('Tenant must be at least 18 years old');
     return date;
   }
 
-  private normalizeRoommateCount(value: unknown) {
-    const count = Number(value ?? 0);
-    if (!Number.isInteger(count) || count < 0) throw new BadRequestException('Roommate count must be a non-negative integer');
-    if (count > 10) throw new BadRequestException('Roommate count must not exceed 10');
-    return count;
-  }
-
   private normalizeStatus(value: unknown, isCreate: boolean) {
+    const normalized = value === 'ACTIVE' ? TenantStatus.STAYING : value;
     const allowed = isCreate ? CREATE_STATUSES : UPDATE_STATUSES;
-    if (!allowed.includes(value as TenantStatus)) {
+    if (!allowed.includes(normalized as TenantStatus)) {
       throw new BadRequestException(isCreate ? 'Tenant cannot be created with left status' : 'Invalid tenant status');
     }
-    return value as TenantStatus;
+    return normalized as TenantStatus;
   }
 
   private requireBusinessId(user: AuthUser) {
@@ -138,9 +130,6 @@ export class TenantsService extends BaseCrudService {
   }
 }
 
-function isAtLeastAge(date: Date, age: number) {
-  const today = new Date();
-  const birthdayThisYear = new Date(today.getFullYear(), date.getMonth(), date.getDate());
-  const years = today.getFullYear() - date.getFullYear() - (today < birthdayThisYear ? 1 : 0);
-  return years >= age;
+function isAtLeastAgeByYear(date: Date, age: number) {
+  return new Date().getFullYear() - date.getFullYear() >= age;
 }

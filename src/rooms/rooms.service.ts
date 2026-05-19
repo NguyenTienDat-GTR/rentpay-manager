@@ -20,7 +20,7 @@ export class RoomsService extends BaseCrudService {
       query,
       searchFields: ['roomCode', 'name', 'floor', 'note'],
       filterFields: ['status', 'floor'],
-      sortFields: ['roomCode', 'baseRentAmount', 'area', 'status', 'createdAt'],
+      sortFields: ['roomCode', 'baseRentAmount', 'area', 'status', 'currentOccupantCount', 'createdAt'],
     });
   }
 
@@ -77,7 +77,8 @@ export class RoomsService extends BaseCrudService {
       area: body.area,
       baseRentAmount: body.baseRentAmount,
       depositAmount: body.depositAmount,
-      maxOccupants: body.maxOccupants == null || body.maxOccupants === '' ? 2 : Number(body.maxOccupants),
+      maxOccupants: body.maxOccupants == null || body.maxOccupants === '' ? 10 : Number(body.maxOccupants),
+      currentOccupantCount: 0,
       status: body.status ?? RoomStatus.AVAILABLE,
       note: body.note,
     };

@@ -1,6 +1,6 @@
 import 'reflect-metadata';
 import { BadRequestException } from '@nestjs/common';
-import { TenantStatus, TenantType } from '@prisma/client';
+import { TenantStatus } from '@prisma/client';
 import * as assert from 'node:assert/strict';
 import { describe, it } from 'node:test';
 import { AuthUser } from '../src/common/decorators/current-user.decorator';
@@ -17,6 +17,11 @@ function birthDateYearsAgo(years: number) {
   const date = new Date();
   date.setFullYear(date.getFullYear() - years);
   return date.toISOString().slice(0, 10);
+}
+
+function birthDateInYear(yearsAgo: number, month = 12, day = 31) {
+  const year = new Date().getFullYear() - yearsAgo;
+  return `${year}-${String(month).padStart(2, '0')}-${String(day).padStart(2, '0')}`;
 }
 
 function validTenantBody(overrides: Record<string, any> = {}) {
@@ -70,7 +75,7 @@ describe('TenantsService', () => {
     await assert.rejects(() => service.createTenant(user, validTenantBody({ identityNumber: '01234567890A' })), BadRequestException);
   });
 
-  it('creates deposited adult tenants and normalizes data from the FE form', async () => {
+  it('creates deposited tenants and normalizes data from the FE form', async () => {
     let createdData: any;
     const service = makeService({
       tenant: {
@@ -83,16 +88,37 @@ describe('TenantsService', () => {
 
     const tenant = await service.createTenant(user, validTenantBody({
       dateOfBirth: birthDateYearsAgo(18),
-      tenantType: TenantType.CHILD,
       status: TenantStatus.DEPOSITED,
-      roommateCount: 1,
-      roommatePhone: '0987654321',
     }));
 
     assert.equal(tenant.status, TenantStatus.DEPOSITED);
     assert.equal(createdData.businessId, user.businessId);
-    assert.equal(createdData.tenantType, TenantType.ADULT);
-    assert.equal(createdData.roommateCount, 1);
+    assert.ok(createdData.dateOfBirth instanceof Date);
+  });
+
+  it('allows blank date of birth during tenant creation and update', async () => {
+    const service = makeService();
+
+    const created = await service.createTenant(user, validTenantBody({ dateOfBirth: '' }));
+    const updated = await service.updateTenant(user, 'tenant-1', { dateOfBirth: '' });
+
+    assert.equal(created.dateOfBirth, null);
+    assert.equal(updated.dateOfBirth, null);
+  });
+
+  it('checks adult tenants by birth year only', async () => {
+    let createdData: any;
+    const service = makeService({
+      tenant: {
+        create: async ({ data }: any) => {
+          createdData = data;
+          return { id: 'tenant-1', ...data };
+        },
+      },
+    });
+
+    await service.createTenant(user, validTenantBody({ dateOfBirth: birthDateInYear(18, 12, 31) }));
+
     assert.ok(createdData.dateOfBirth instanceof Date);
   });
 
@@ -105,12 +131,4 @@ describe('TenantsService', () => {
     );
   });
 
-  it('requires one roommate phone when roommate count is greater than zero', async () => {
-    const service = makeService();
-
-    await assert.rejects(
-      () => service.createTenant(user, validTenantBody({ roommateCount: 1 })),
-      BadRequestException,
-    );
-  });
 });

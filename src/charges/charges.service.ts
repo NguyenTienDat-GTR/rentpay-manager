@@ -31,6 +31,9 @@ export class ChargesService extends BaseCrudService {
     const businessId = requireBusinessId(user, body.businessId);
     const paymentCode = await this.uniquePaymentCode();
     const chargeType = body.chargeType as ChargeType;
+    if (chargeType === ChargeType.ROOM_RENT && !body.contractId) {
+      throw new BadRequestException('ROOM_RENT charge must be linked to a contract');
+    }
     if (chargeType === ChargeType.ROOM_RENT && body.contractId && body.billingPeriodId) {
       const exists = await this.prisma.charge.findFirst({
         where: { businessId, contractId: body.contractId, billingPeriodId: body.billingPeriodId, chargeType },

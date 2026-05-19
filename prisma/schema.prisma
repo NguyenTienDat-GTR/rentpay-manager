@@ -36,15 +36,9 @@ enum RoomStatus {
   INACTIVE
 }
 
-enum TenantType {
-  ADULT
-  CHILD
-  OTHER
-}
-
 enum TenantStatus {
-  ACTIVE
   DEPOSITED
+  STAYING
   LEFT
 }
 
@@ -52,6 +46,7 @@ enum ContractStatus {
   PENDING
   ACTIVE
   EXPIRED
+  CANCELLED
   TERMINATED
 }
 
@@ -61,9 +56,10 @@ enum PaymentCycle {
   CUSTOM
 }
 
-enum OccupantRole {
-  REPRESENTATIVE
-  ROOMMATE
+enum OccupantType {
+  ADULT
+  CHILD
+  ELDERLY
 }
 
 enum OccupantStatus {
@@ -247,6 +243,7 @@ model Room {
   baseRentAmount Decimal            @db.Decimal(14, 2)
   depositAmount  Decimal?           @db.Decimal(14, 2)
   maxOccupants   Int?
+  currentOccupantCount Int           @default(0)
   status         RoomStatus         @default(AVAILABLE)
   note           String?
   createdAt      DateTime           @default(now())
@@ -266,20 +263,16 @@ model Tenant {
   id                    String             @id @default(cuid())
   businessId            String
   fullName              String
-  phone                 String?
-  identityNumber        String?
+  phone                 String
+  identityNumber        String
   dateOfBirth           DateTime?
-  permanentAddress      String?
-  tenantType            TenantType         @default(ADULT)
-  roommateCount         Int                @default(0)
-  roommatePhone         String?
+  permanentAddress      String
   note                  String?
-  status                TenantStatus       @default(ACTIVE)
+  status                TenantStatus       @default(DEPOSITED)
   createdAt             DateTime           @default(now())
   updatedAt             DateTime           @updatedAt
   business              Business           @relation(fields: [businessId], references: [id])
   representedContracts  RentalContract[]   @relation("RepresentativeTenant")
-  occupants             ContractOccupant[]
   charges               Charge[]
   payments              Payment[]
   notificationLogs      NotificationLog[]
@@ -319,8 +312,12 @@ model ContractOccupant {
   businessId   String
   contractId   String
   roomId       String
-  tenantId     String
-  role         OccupantRole
+  fullName     String
+  phone        String?
+  identityNumber String?
+  dateOfBirth  DateTime?
+  permanentAddress String?
+  occupantType OccupantType
   relationship String?
   moveInDate   DateTime
   moveOutDate  DateTime?
@@ -330,10 +327,9 @@ model ContractOccupant {
   business     Business       @relation(fields: [businessId], references: [id])
   contract     RentalContract @relation(fields: [contractId], references: [id])
   room         Room           @relation(fields: [roomId], references: [id])
-  tenant       Tenant         @relation(fields: [tenantId], references: [id])
 
   @@index([businessId, status])
-  @@index([contractId, role])
+  @@index([contractId, occupantType])
 }
 
 model BillingPeriod {

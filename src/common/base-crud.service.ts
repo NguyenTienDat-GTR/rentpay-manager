@@ -20,6 +20,7 @@ export class BaseCrudService {
     filterFields?: string[];
     sortFields?: string[];
     include?: Record<string, unknown>;
+    select?: Record<string, boolean | Record<string, unknown>>;
     businessScoped?: boolean;
   }) {
     const { page, take, skip } = pagination(options.query);
@@ -36,6 +37,7 @@ export class BaseCrudService {
       this.delegate(options.model).findMany({
         where: finalWhere,
         include: options.include,
+        select: options.select,
         skip,
         take,
         orderBy: orderBy(options.query, options.sortFields ?? ['createdAt']),
@@ -45,10 +47,11 @@ export class BaseCrudService {
     return { items, meta: { page, take, total, pages: Math.ceil(total / take) } };
   }
 
-  async get(model: string, user: AuthUser, id: string, include?: Record<string, unknown>, businessScoped = true) {
+  async get(model: string, user: AuthUser, id: string, include?: Record<string, unknown>, businessScoped = true, select?: Record<string, boolean | Record<string, unknown>>) {
     const item = await this.delegate(model).findFirst({
       where: businessScoped ? scopedWhere(user, { id }) : { id },
       include,
+      select,
     });
     if (!item) throw new NotFoundException(`${model} not found`);
     return item;

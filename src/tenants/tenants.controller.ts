@@ -16,7 +16,7 @@ export class TenantsController {
   @Get(':id')
   @Retryable()
   get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.tenants.get('tenant', user, id);
+    return this.tenants.getTenant(user, id);
   }
 
   @Post()

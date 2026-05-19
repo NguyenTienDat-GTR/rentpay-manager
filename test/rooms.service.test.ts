@@ -52,7 +52,7 @@ describe('RoomsService', () => {
 
     assert.equal(room.roomCode, 'KHU-A-101');
     assert.equal(createdData.status, RoomStatus.AVAILABLE);
-    assert.equal(createdData.maxOccupants, 2);
+    assert.equal(createdData.maxOccupants, 10);
   });
 
   it('returns the existing room instead of leaking a unique constraint error on duplicate create', async () => {

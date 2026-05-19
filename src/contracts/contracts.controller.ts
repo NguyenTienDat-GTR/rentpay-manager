@@ -16,7 +16,7 @@ export class ContractsController {
   @Get(':id')
   @Retryable()
   get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.contracts.get('rentalContract', user, id, { room: true, representativeTenant: true, occupants: { include: { tenant: true } } });
+    return this.contracts.get('rentalContract', user, id, { room: true, representativeTenant: true, occupants: true });
   }
 
   @Post()
@@ -37,5 +37,20 @@ export class ContractsController {
   @Patch(':id/terminate')
   terminate(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.contracts.terminate(user, id);
+  }
+
+  @Patch(':id/expire')
+  expire(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.contracts.expire(user, id);
+  }
+
+  @Patch(':id/cancel')
+  cancel(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.contracts.cancel(user, id);
+  }
+
+  @Post(':id/transfer-room')
+  transferRoom(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: any) {
+    return this.contracts.transferRoom(user, id, body);
   }
 }
