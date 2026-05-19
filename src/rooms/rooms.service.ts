@@ -86,7 +86,7 @@ export class RoomsService extends BaseCrudService {
 
   async removeRoom(user: AuthUser, id: string) {
     const room = await this.get('room', user, id);
-    if (room.status === RoomStatus.OCCUPIED) throw new BadRequestException('Cannot delete an occupied room');
+    if (room.status === RoomStatus.OCCUPIED || room.status === RoomStatus.DEPOSITED) throw new BadRequestException('Cannot delete a reserved or occupied room');
     const activeContract = await this.findReservedContractForRoom(id);
     if (activeContract) throw new BadRequestException('Cannot delete room with PENDING or ACTIVE contract');
     await this.prisma.room.delete({ where: { id } });
@@ -113,7 +113,6 @@ export class RoomsService extends BaseCrudService {
       floor: trimOptional(body.floor),
       area: body.area,
       baseRentAmount: body.baseRentAmount,
-      depositAmount: body.depositAmount,
       maxOccupants: body.maxOccupants == null || body.maxOccupants === '' ? 10 : Number(body.maxOccupants),
       currentOccupantCount: 0,
       status: body.status ?? RoomStatus.AVAILABLE,
@@ -126,6 +125,7 @@ export class RoomsService extends BaseCrudService {
     this.assertRoomStatusCanBeSetByRoomApi(body.status);
     const data = { ...body };
     delete data.businessId;
+    delete data.depositAmount;
     const nextFloor = body.floor !== undefined ? body.floor : current.floor;
     if (body.roomCode !== undefined || body.floor !== undefined) data.roomCode = buildRoomCode(body.roomCode ?? current.roomCode, nextFloor);
     if (body.floor !== undefined) data.floor = trimOptional(body.floor);
@@ -136,14 +136,16 @@ export class RoomsService extends BaseCrudService {
 
   private assertRoomStatusCanBeSetByRoomApi(status?: RoomStatus) {
     if (status === RoomStatus.OCCUPIED) throw new BadRequestException('Occupied status can only be set by an active rental contract');
+    if (status === RoomStatus.DEPOSITED) throw new BadRequestException('Deposited status can only be set by a rental contract');
   }
 
   private async assertAllowedStatusChange(room: any, nextStatus?: RoomStatus) {
     if (!nextStatus || nextStatus === room.status) return;
-    if (room.status !== RoomStatus.OCCUPIED && nextStatus !== RoomStatus.OCCUPIED) return;
+    const guardedStatuses: RoomStatus[] = [RoomStatus.DEPOSITED, RoomStatus.OCCUPIED];
+    if (!guardedStatuses.includes(room.status) && !guardedStatuses.includes(nextStatus)) return;
     const activeContract = await this.findReservedContractForRoom(room.id);
-    if (room.status === RoomStatus.OCCUPIED || activeContract) {
-      throw new BadRequestException('Cannot change an occupied room to maintenance or inactive');
+    if (guardedStatuses.includes(room.status) || activeContract) {
+      throw new BadRequestException('Cannot change a reserved or occupied room to maintenance or inactive');
     }
   }
 
