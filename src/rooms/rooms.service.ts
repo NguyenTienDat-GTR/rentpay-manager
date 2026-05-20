@@ -201,30 +201,28 @@ export class RoomsService extends BaseCrudService {
 
   private async getCurrentTenantsByRoom(user: AuthUser, roomIds: string[]) {
     const businessId = requireBusinessId(user);
-    const contractRooms = await this.prisma.rentalContractRoom.findMany({
+    const contracts = await this.prisma.rentalContract.findMany({
       where: {
-        roomId: { in: roomIds },
-        contract: {
-          businessId,
-          status: ContractStatus.ACTIVE,
-          startDate: { lt: addDays(startOfLocalDay(new Date()), 1) },
-        },
+        businessId,
+        status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] },
+        OR: [{ roomId: { in: roomIds } }, { contractRooms: { some: { roomId: { in: roomIds } } } }],
       },
       select: {
         roomId: true,
-        contract: {
-          select: {
-            representativeTenant: { select: { id: true, fullName: true, phone: true } },
-          },
-        },
+        representativeTenant: { select: { id: true, fullName: true, phone: true } },
+        contractRooms: { select: { roomId: true } },
       },
     });
     const tenantsByRoom = new Map<string, Array<{ id: string; fullName: string; phone: string }>>();
-    for (const item of contractRooms) {
-      const tenant = item.contract.representativeTenant;
-      const existing = tenantsByRoom.get(item.roomId) ?? [];
-      if (!existing.some((current) => current.id === tenant.id)) existing.push(tenant);
-      tenantsByRoom.set(item.roomId, existing);
+    const requestedRoomIds = new Set(roomIds);
+    for (const contract of contracts) {
+      const linkedRoomIds = contract.contractRooms.length ? contract.contractRooms.map((item) => item.roomId) : [contract.roomId];
+      for (const roomId of linkedRoomIds) {
+        if (!requestedRoomIds.has(roomId)) continue;
+        const existing = tenantsByRoom.get(roomId) ?? [];
+        if (!existing.some((current) => current.id === contract.representativeTenant.id)) existing.push(contract.representativeTenant);
+        tenantsByRoom.set(roomId, existing);
+      }
     }
     return tenantsByRoom;
   }
@@ -255,14 +253,4 @@ function trimOptional(value: unknown) {
 
 function containsInsensitive(value: unknown) {
   return { contains: String(value), mode: Prisma.QueryMode.insensitive };
-}
-
-function startOfLocalDay(date: Date) {
-  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
-}
-
-function addDays(date: Date, days: number) {
-  const next = new Date(date);
-  next.setDate(next.getDate() + days);
-  return next;
 }

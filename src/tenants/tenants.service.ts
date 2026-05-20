@@ -177,8 +177,7 @@ export class TenantsService extends BaseCrudService {
       where: {
         businessId,
         representativeTenantId: { in: tenantIds },
-        status: ContractStatus.ACTIVE,
-        startDate: { lt: addDays(startOfLocalDay(new Date()), 1) },
+        status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] },
       },
       select: {
         representativeTenantId: true,
