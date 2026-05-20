@@ -14,9 +14,9 @@ export class RoomsService extends BaseCrudService {
     super(prisma);
   }
 
-  list(user: AuthUser, query: any) {
+  async list(user: AuthUser, query: any) {
     if (query.availableForContract === 'true' || query.availableForContract === true) return this.listAvailableForContract(user, query);
-    return super.listItems({
+    const result = await super.listItems({
       model: 'room',
       user,
       query,
@@ -24,6 +24,13 @@ export class RoomsService extends BaseCrudService {
       filterFields: ['status', 'floor'],
       sortFields: ['roomCode', 'baseRentAmount', 'area', 'status', 'currentOccupantCount', 'createdAt'],
     });
+    const ids = result.items.map((item: any) => item.id).filter(Boolean);
+    if (!ids.length) return result;
+    const currentTenantsByRoom = await this.getCurrentTenantsByRoom(user, ids);
+    return {
+      ...result,
+      items: result.items.map((item: any) => ({ ...item, currentTenants: currentTenantsByRoom.get(item.id) ?? [] })),
+    };
   }
 
   private async listAvailableForContract(user: AuthUser, query: any) {
@@ -191,6 +198,36 @@ export class RoomsService extends BaseCrudService {
     }
     return this.prisma.rentalContract.findFirst({ where: { roomId, status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] } } });
   }
+
+  private async getCurrentTenantsByRoom(user: AuthUser, roomIds: string[]) {
+    const businessId = requireBusinessId(user);
+    const contractRooms = await this.prisma.rentalContractRoom.findMany({
+      where: {
+        roomId: { in: roomIds },
+        contract: {
+          businessId,
+          status: ContractStatus.ACTIVE,
+          startDate: { lt: addDays(startOfLocalDay(new Date()), 1) },
+        },
+      },
+      select: {
+        roomId: true,
+        contract: {
+          select: {
+            representativeTenant: { select: { id: true, fullName: true, phone: true } },
+          },
+        },
+      },
+    });
+    const tenantsByRoom = new Map<string, Array<{ id: string; fullName: string; phone: string }>>();
+    for (const item of contractRooms) {
+      const tenant = item.contract.representativeTenant;
+      const existing = tenantsByRoom.get(item.roomId) ?? [];
+      if (!existing.some((current) => current.id === tenant.id)) existing.push(tenant);
+      tenantsByRoom.set(item.roomId, existing);
+    }
+    return tenantsByRoom;
+  }
 }
 
 function buildRoomCode(roomCode: unknown, floor: unknown) {
@@ -218,4 +255,14 @@ function trimOptional(value: unknown) {
 
 function containsInsensitive(value: unknown) {
   return { contains: String(value), mode: Prisma.QueryMode.insensitive };
+}
+
+function startOfLocalDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function addDays(date: Date, days: number) {
+  const next = new Date(date);
+  next.setDate(next.getDate() + days);
+  return next;
 }
