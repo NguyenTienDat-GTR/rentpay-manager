@@ -53,13 +53,19 @@ export class TenantsService extends BaseCrudService {
         occupants: { where: { status: { not: OccupantStatus.LEFT } }, select: { id: true } },
       },
     });
+    const activeContracts = await this.getEffectiveContractsForTenants(this.requireBusinessId(user), ids);
     const roommateCounts = new Map<string, number>();
     for (const contract of contracts) {
       roommateCounts.set(contract.representativeTenantId, (roommateCounts.get(contract.representativeTenantId) ?? 0) + contract.occupants.length);
     }
+    const roomsByTenantId = this.mapCurrentRoomsByTenant(activeContracts);
     return {
       ...result,
-      items: result.items.map((item: any) => ({ ...item, roommateCount: roommateCounts.get(item.id) ?? 0 })),
+      items: result.items.map((item: any) => ({
+        ...item,
+        roommateCount: roommateCounts.get(item.id) ?? 0,
+        currentRooms: roomsByTenantId.get(item.id) ?? [],
+      })),
     };
   }
 
@@ -77,7 +83,9 @@ export class TenantsService extends BaseCrudService {
         status: { not: OccupantStatus.LEFT },
       },
     });
-    return { ...tenant, roommateCount };
+    const activeContracts = await this.getEffectiveContractsForTenants(this.requireBusinessId(user), [id]);
+    const roomsByTenantId = this.mapCurrentRoomsByTenant(activeContracts);
+    return { ...tenant, roommateCount, currentRooms: roomsByTenantId.get(id) ?? [] };
   }
 
   async createTenant(user: AuthUser, body: any) {
@@ -162,6 +170,37 @@ export class TenantsService extends BaseCrudService {
   private requireBusinessId(user: AuthUser) {
     if (!user.businessId) throw new BadRequestException('Business scope is required');
     return user.businessId;
+  }
+
+  private getEffectiveContractsForTenants(businessId: string, tenantIds: string[]) {
+    return this.prisma.rentalContract.findMany({
+      where: {
+        businessId,
+        representativeTenantId: { in: tenantIds },
+        status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] },
+      },
+      select: {
+        representativeTenantId: true,
+        room: { select: { id: true, roomCode: true, name: true } },
+        contractRooms: { select: { room: { select: { id: true, roomCode: true, name: true } } } },
+      },
+    });
+  }
+
+  private mapCurrentRoomsByTenant(contracts: Awaited<ReturnType<TenantsService['getEffectiveContractsForTenants']>>) {
+    const roomsByTenantId = new Map<string, Array<{ id: string; roomCode: string; name: string | null }>>();
+    for (const contract of contracts) {
+      const existing = roomsByTenantId.get(contract.representativeTenantId) ?? [];
+      const seen = new Set(existing.map((room) => room.id));
+      const rooms = contract.contractRooms.length ? contract.contractRooms.map((item) => item.room) : [contract.room];
+      for (const room of rooms) {
+        if (seen.has(room.id)) continue;
+        seen.add(room.id);
+        existing.push(room);
+      }
+      roomsByTenantId.set(contract.representativeTenantId, existing);
+    }
+    return roomsByTenantId;
   }
 
   private async syncContractDrivenStatuses(user: AuthUser) {

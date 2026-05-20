@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { BillingPeriodStatus, ChargeType, ContractStatus } from '@prisma/client';
+import { BillingPeriodStatus, ChargeStatus, ChargeType, ContractStatus } from '@prisma/client';
 import dayjs = require('dayjs');
 import { AuditService } from '../audit/audit.service';
 import { BaseCrudService } from '../common/base-crud.service';
@@ -58,6 +58,9 @@ export class BillingPeriodsService extends BaseCrudService {
     for (const contract of contracts) {
       const exists = await this.prisma.charge.findFirst({ where: { contractId: contract.id, billingPeriodId: id, chargeType: ChargeType.ROOM_RENT } });
       if (exists) continue;
+      const hasPreviousRoomRent = await this.prisma.charge.findFirst({ where: { contractId: contract.id, chargeType: ChargeType.ROOM_RENT } });
+      const paidDepositAmount = hasPreviousRoomRent ? 0 : await this.getPaidDepositAmount(contract.id);
+      const amountDue = Math.max(Number(contract.rentAmount) - paidDepositAmount, 0);
       const paymentCode = await this.uniquePaymentCode();
       created.push(
         await this.prisma.charge.create({
@@ -69,11 +72,12 @@ export class BillingPeriodsService extends BaseCrudService {
             billingPeriodId: id,
             bankAccountId: bankAccount.id,
             chargeType: ChargeType.ROOM_RENT,
-            title: `Tien phong thang ${period.month}/${period.year}`,
-            amountDue: contract.rentAmount,
+            title: paidDepositAmount > 0 ? `Tien phong thang ${period.month}/${period.year} sau khi tru coc` : `Tien phong thang ${period.month}/${period.year}`,
+            amountDue,
             dueDate: dayjs(period.startDate).date(contract.paymentDueDay).toDate(),
             paymentCode,
             transferContent: buildTransferContent(ChargeType.ROOM_RENT, paymentCode),
+            status: amountDue === 0 ? ChargeStatus.PAID : ChargeStatus.UNPAID,
           },
         }),
       );
@@ -90,5 +94,13 @@ export class BillingPeriodsService extends BaseCrudService {
       if (!exists) return code;
     }
     throw new BadRequestException('Unable to generate payment code');
+  }
+
+  private async getPaidDepositAmount(contractId: string) {
+    const depositCharges = await this.prisma.charge.findMany({
+      where: { contractId, chargeType: ChargeType.DEPOSIT, status: { not: ChargeStatus.CANCELLED } },
+      select: { amountPaid: true },
+    });
+    return depositCharges.reduce((sum, charge) => sum + Number(charge.amountPaid ?? 0), 0);
   }
 }

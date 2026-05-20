@@ -14,9 +14,9 @@ export class RoomsService extends BaseCrudService {
     super(prisma);
   }
 
-  list(user: AuthUser, query: any) {
+  async list(user: AuthUser, query: any) {
     if (query.availableForContract === 'true' || query.availableForContract === true) return this.listAvailableForContract(user, query);
-    return super.listItems({
+    const result = await super.listItems({
       model: 'room',
       user,
       query,
@@ -24,6 +24,13 @@ export class RoomsService extends BaseCrudService {
       filterFields: ['status', 'floor'],
       sortFields: ['roomCode', 'baseRentAmount', 'area', 'status', 'currentOccupantCount', 'createdAt'],
     });
+    const ids = result.items.map((item: any) => item.id).filter(Boolean);
+    if (!ids.length) return result;
+    const currentTenantsByRoom = await this.getCurrentTenantsByRoom(user, ids);
+    return {
+      ...result,
+      items: result.items.map((item: any) => ({ ...item, currentTenants: currentTenantsByRoom.get(item.id) ?? [] })),
+    };
   }
 
   private async listAvailableForContract(user: AuthUser, query: any) {
@@ -86,7 +93,7 @@ export class RoomsService extends BaseCrudService {
 
   async removeRoom(user: AuthUser, id: string) {
     const room = await this.get('room', user, id);
-    if (room.status === RoomStatus.OCCUPIED) throw new BadRequestException('Cannot delete an occupied room');
+    if (room.status === RoomStatus.OCCUPIED || room.status === RoomStatus.DEPOSITED) throw new BadRequestException('Cannot delete a reserved or occupied room');
     const activeContract = await this.findReservedContractForRoom(id);
     if (activeContract) throw new BadRequestException('Cannot delete room with PENDING or ACTIVE contract');
     await this.prisma.room.delete({ where: { id } });
@@ -113,7 +120,6 @@ export class RoomsService extends BaseCrudService {
       floor: trimOptional(body.floor),
       area: body.area,
       baseRentAmount: body.baseRentAmount,
-      depositAmount: body.depositAmount,
       maxOccupants: body.maxOccupants == null || body.maxOccupants === '' ? 10 : Number(body.maxOccupants),
       currentOccupantCount: 0,
       status: body.status ?? RoomStatus.AVAILABLE,
@@ -126,6 +132,7 @@ export class RoomsService extends BaseCrudService {
     this.assertRoomStatusCanBeSetByRoomApi(body.status);
     const data = { ...body };
     delete data.businessId;
+    delete data.depositAmount;
     const nextFloor = body.floor !== undefined ? body.floor : current.floor;
     if (body.roomCode !== undefined || body.floor !== undefined) data.roomCode = buildRoomCode(body.roomCode ?? current.roomCode, nextFloor);
     if (body.floor !== undefined) data.floor = trimOptional(body.floor);
@@ -136,14 +143,16 @@ export class RoomsService extends BaseCrudService {
 
   private assertRoomStatusCanBeSetByRoomApi(status?: RoomStatus) {
     if (status === RoomStatus.OCCUPIED) throw new BadRequestException('Occupied status can only be set by an active rental contract');
+    if (status === RoomStatus.DEPOSITED) throw new BadRequestException('Deposited status can only be set by a rental contract');
   }
 
   private async assertAllowedStatusChange(room: any, nextStatus?: RoomStatus) {
     if (!nextStatus || nextStatus === room.status) return;
-    if (room.status !== RoomStatus.OCCUPIED && nextStatus !== RoomStatus.OCCUPIED) return;
+    const guardedStatuses: RoomStatus[] = [RoomStatus.DEPOSITED, RoomStatus.OCCUPIED];
+    if (!guardedStatuses.includes(room.status) && !guardedStatuses.includes(nextStatus)) return;
     const activeContract = await this.findReservedContractForRoom(room.id);
-    if (room.status === RoomStatus.OCCUPIED || activeContract) {
-      throw new BadRequestException('Cannot change an occupied room to maintenance or inactive');
+    if (guardedStatuses.includes(room.status) || activeContract) {
+      throw new BadRequestException('Cannot change a reserved or occupied room to maintenance or inactive');
     }
   }
 
@@ -188,6 +197,34 @@ export class RoomsService extends BaseCrudService {
       });
     }
     return this.prisma.rentalContract.findFirst({ where: { roomId, status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] } } });
+  }
+
+  private async getCurrentTenantsByRoom(user: AuthUser, roomIds: string[]) {
+    const businessId = requireBusinessId(user);
+    const contracts = await this.prisma.rentalContract.findMany({
+      where: {
+        businessId,
+        status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] },
+        OR: [{ roomId: { in: roomIds } }, { contractRooms: { some: { roomId: { in: roomIds } } } }],
+      },
+      select: {
+        roomId: true,
+        representativeTenant: { select: { id: true, fullName: true, phone: true } },
+        contractRooms: { select: { roomId: true } },
+      },
+    });
+    const tenantsByRoom = new Map<string, Array<{ id: string; fullName: string; phone: string }>>();
+    const requestedRoomIds = new Set(roomIds);
+    for (const contract of contracts) {
+      const linkedRoomIds = contract.contractRooms.length ? contract.contractRooms.map((item) => item.roomId) : [contract.roomId];
+      for (const roomId of linkedRoomIds) {
+        if (!requestedRoomIds.has(roomId)) continue;
+        const existing = tenantsByRoom.get(roomId) ?? [];
+        if (!existing.some((current) => current.id === contract.representativeTenant.id)) existing.push(contract.representativeTenant);
+        tenantsByRoom.set(roomId, existing);
+      }
+    }
+    return tenantsByRoom;
   }
 }
 

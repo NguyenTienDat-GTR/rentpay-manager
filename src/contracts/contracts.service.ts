@@ -1,9 +1,10 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { ContractStatus, OccupantStatus, OccupantType, RoomStatus, TenantStatus } from '@prisma/client';
+import { ChargeType, ContractStatus, OccupantStatus, OccupantType, RoomStatus, TenantStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { BaseCrudService } from '../common/base-crud.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { requireBusinessId } from '../common/utils/business-scope';
+import { buildTransferContent, makePaymentCode } from '../common/utils/payment-code';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
 
@@ -47,7 +48,7 @@ export class ContractsService extends BaseCrudService {
     this.assertOccupantCapacity(rooms, occupants);
     const effective = isEffectiveActiveContract(status, startDate);
     const rentAmount = body.rentAmount ?? sumMoney(rooms.map((room) => room.baseRentAmount));
-    const depositAmount = body.depositAmount ?? sumMoney(rooms.map((room) => room.depositAmount ?? 0));
+    const depositAmount = body.depositAmount ?? 0;
     const paymentDueDay = this.normalizePaymentDueDay(body.paymentDueDay ?? startDate.getDate());
 
     const contract = await this.prisma.$transaction(async (tx) => {
@@ -80,6 +81,7 @@ export class ContractsService extends BaseCrudService {
       });
       for (const roomId of roomIds) await tx.rentalContractRoom.create({ data: { businessId, contractId: created.id, roomId } });
       await this.createOccupants(tx, businessId, created.id, roomIds[0], occupants, effective ? OccupantStatus.STAYING : OccupantStatus.DEPOSITED);
+      await this.createDepositChargeIfNeeded(tx, businessId, created);
       if (isRoomReservedContractStatus(created.status)) {
         if (effective) await this.updateOccupiedRooms(tx, rooms, roomIds[0], occupants);
         else await this.updateReservedRooms(tx, rooms);
@@ -171,7 +173,7 @@ export class ContractsService extends BaseCrudService {
           representativeTenantId,
           startDate: transferDate,
           rentAmount: body.rentAmount ?? newRoom.baseRentAmount,
-          depositAmount: body.depositAmount ?? newRoom.depositAmount ?? 0,
+          depositAmount: body.depositAmount ?? 0,
           paymentCycle: body.paymentCycle ?? oldContract.paymentCycle,
           paymentDueDay: Number(body.paymentDueDay ?? oldContract.paymentDueDay),
           status: ContractStatus.ACTIVE,
@@ -191,7 +193,8 @@ export class ContractsService extends BaseCrudService {
         roomId: body.newRoomId,
         moveInDate: transferDate,
       })), transferEffective ? OccupantStatus.STAYING : OccupantStatus.DEPOSITED);
-      await tx.room.update({ where: { id: body.newRoomId }, data: { status: RoomStatus.OCCUPIED, currentOccupantCount: transferEffective ? 1 + transferredOccupants.length : 0 } });
+      await this.createDepositChargeIfNeeded(tx, businessId, created);
+      await tx.room.update({ where: { id: body.newRoomId }, data: { status: transferEffective ? RoomStatus.OCCUPIED : RoomStatus.DEPOSITED, currentOccupantCount: transferEffective ? 1 + transferredOccupants.length : 0 } });
       await tx.tenant.update({ where: { id: representativeTenantId }, data: { status: transferEffective ? TenantStatus.STAYING : TenantStatus.DEPOSITED } });
       if (oldContract.representativeTenantId !== representativeTenantId) await this.markRepresentativeLeftIfNoActiveContract(tx, businessId, oldContract.representativeTenantId, id);
 
@@ -331,9 +334,34 @@ export class ContractsService extends BaseCrudService {
     for (const room of rooms) {
       await tx.room.update({
         where: { id: room.id },
-        data: { status: RoomStatus.OCCUPIED, currentOccupantCount: 0 },
+        data: { status: RoomStatus.DEPOSITED, currentOccupantCount: 0 },
       });
     }
+  }
+
+  private async createDepositChargeIfNeeded(tx: any, businessId: string, contract: any) {
+    const depositAmount = Number(contract.depositAmount ?? 0);
+    if (depositAmount <= 0) return null;
+    const bankAccount = await tx.bankAccount.findFirst({ where: { businessId, isDefault: true, status: 'ACTIVE' } });
+    if (!bankAccount) throw new BadRequestException('Default active bank account is required to create deposit charge');
+    const exists = await tx.charge.findFirst({ where: { businessId, contractId: contract.id, chargeType: ChargeType.DEPOSIT } });
+    if (exists) return exists;
+    const paymentCode = await this.uniquePaymentCode(tx);
+    return tx.charge.create({
+      data: {
+        businessId,
+        roomId: contract.roomId,
+        contractId: contract.id,
+        payerTenantId: contract.representativeTenantId,
+        bankAccountId: bankAccount.id,
+        chargeType: ChargeType.DEPOSIT,
+        title: 'Tien coc hop dong thue',
+        amountDue: depositAmount,
+        dueDate: contract.startDate,
+        paymentCode,
+        transferContent: buildTransferContent(ChargeType.DEPOSIT, paymentCode),
+      },
+    });
   }
 
   private normalizeRepresentative(input: any) {
@@ -400,8 +428,8 @@ export class ContractsService extends BaseCrudService {
         },
       },
     });
-    if (active) throw new BadRequestException('Room already has an ACTIVE contract');
-    if (room.status === RoomStatus.OCCUPIED && !exceptId) throw new BadRequestException('Room must be AVAILABLE');
+    if (active) throw new BadRequestException('Room already has a pending or active contract');
+    if ((room.status === RoomStatus.OCCUPIED || room.status === RoomStatus.DEPOSITED) && !exceptId) throw new BadRequestException('Room must be AVAILABLE');
   }
 
   private normalizeContractStatus(value: unknown) {
@@ -485,6 +513,15 @@ export class ContractsService extends BaseCrudService {
     await this.audit.log({ businessId, userId: user.sub, action, entity: 'RentalContract', entityId: id });
   }
 
+  private async uniquePaymentCode(tx: any) {
+    for (let i = 0; i < 10; i++) {
+      const code = makePaymentCode();
+      const exists = await tx.charge.findUnique({ where: { paymentCode: code } });
+      if (!exists) return code;
+    }
+    throw new BadRequestException('Unable to generate payment code');
+  }
+
   private async syncEffectiveActiveContracts(user: AuthUser) {
     const businessId = requireBusinessId(user);
     const now = new Date();
@@ -541,7 +578,7 @@ export class ContractsService extends BaseCrudService {
     for (const contract of reservedContracts) {
       if (isEffectiveActiveContract(contract.status, contract.startDate)) continue;
       const rooms = contract.contractRooms.length ? contract.contractRooms.map((item) => item.room) : [contract.room];
-      if (rooms.some((room) => room.status !== RoomStatus.OCCUPIED || room.currentOccupantCount !== 0)) {
+      if (rooms.some((room) => room.status !== RoomStatus.DEPOSITED || room.currentOccupantCount !== 0)) {
         await this.prisma.$transaction((tx) => this.updateReservedRooms(tx, rooms));
       }
     }

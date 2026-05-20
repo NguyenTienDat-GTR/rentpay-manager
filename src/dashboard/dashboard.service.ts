@@ -46,6 +46,7 @@ export class DashboardService {
     const response = {
       totalRooms: rooms.reduce((sum, r) => sum + r._count, 0),
       occupiedRooms: roomCounts[RoomStatus.OCCUPIED] ?? 0,
+      depositedRooms: roomCounts[RoomStatus.DEPOSITED] ?? 0,
       availableRooms: roomCounts[RoomStatus.AVAILABLE] ?? 0,
       maintenanceRooms: roomCounts[RoomStatus.MAINTENANCE] ?? 0,
       totalCurrentOccupants: representativeCount + occupants,
