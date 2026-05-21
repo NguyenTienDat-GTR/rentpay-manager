@@ -189,6 +189,7 @@ model Business {
   occupants        ContractOccupant[]
   billingPeriods   BillingPeriod[]
   charges          Charge[]
+  chargeItems      ChargeItem[]
   payments         Payment[]
   transactions     BankTransaction[]
   matches          PaymentMatch[]
@@ -394,6 +395,7 @@ model Charge {
   payerTenant     Tenant?         @relation(fields: [payerTenantId], references: [id])
   billingPeriod   BillingPeriod?  @relation(fields: [billingPeriodId], references: [id])
   bankAccount     BankAccount     @relation(fields: [bankAccountId], references: [id])
+  items           ChargeItem[]
   payments        Payment[]
   matches         PaymentMatch[]
   notificationLogs NotificationLog[]
@@ -401,6 +403,23 @@ model Charge {
   @@index([businessId, status])
   @@index([roomId])
   @@index([contractId, billingPeriodId])
+}
+
+model ChargeItem {
+  id          String     @id @default(cuid())
+  businessId  String
+  chargeId    String
+  chargeType  ChargeType
+  title       String
+  amount      Decimal    @db.Decimal(14, 2)
+  note        String?
+  createdAt   DateTime   @default(now())
+  updatedAt   DateTime   @updatedAt
+  business    Business   @relation(fields: [businessId], references: [id])
+  charge      Charge     @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+
+  @@index([businessId, chargeType])
+  @@index([chargeId])
 }
 
 model Payment {

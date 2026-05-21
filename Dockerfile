@@ -30,4 +30,4 @@ COPY --from=builder /app/node_modules/@prisma/client ./node_modules/@prisma/clie
 COPY --from=builder /app/node_modules/.prisma ./node_modules/.prisma
 
 EXPOSE 5000
-CMD ["node", "dist/main.js"]
+CMD ["npm", "run", "start:prod"]

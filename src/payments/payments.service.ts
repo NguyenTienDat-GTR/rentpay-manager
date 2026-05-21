@@ -33,6 +33,7 @@ export class PaymentsService extends BaseCrudService {
   async recordCash(user: AuthUser, body: any) {
     const charge = await this.get('charge', user, body.chargeId);
     if (charge.status === ChargeStatus.CANCELLED) throw new BadRequestException('Cannot pay a cancelled charge');
+    if ([ChargeStatus.PAID, ChargeStatus.OVERPAID].includes(charge.status)) throw new BadRequestException('Charge is already paid');
     const payment = await this.prisma.payment.create({
       data: {
         businessId: charge.businessId,
@@ -63,6 +64,7 @@ export class PaymentsService extends BaseCrudService {
   async createBankTransferPayment(input: { chargeId: string; bankTransactionId: string; amount: number; paidAt: Date }) {
     const charge = await this.prisma.charge.findUnique({ where: { id: input.chargeId } });
     if (!charge) throw new BadRequestException('Charge not found');
+    if ([ChargeStatus.PAID, ChargeStatus.OVERPAID, ChargeStatus.CANCELLED].some((status) => status === charge.status)) throw new BadRequestException('Charge cannot receive more payments');
     const payment = await this.prisma.payment.create({
       data: {
         businessId: charge.businessId,

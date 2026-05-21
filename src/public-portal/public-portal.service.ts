@@ -42,6 +42,7 @@ export class PublicPortalService {
 
     const charges = await this.prisma.charge.findMany({
       where: { businessId: business.id, roomId: room.id, contractId: contract.id },
+      include: { items: true },
       orderBy: { dueDate: 'asc' },
     });
     const tokenId = randomUUID();
