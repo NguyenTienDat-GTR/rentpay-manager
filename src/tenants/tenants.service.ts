@@ -73,19 +73,23 @@ export class TenantsService extends BaseCrudService {
     await this.syncContractDrivenStatuses(user);
     const tenant = await this.get('tenant', user, id, undefined, true, TENANT_SELECT);
     if (!(this.prisma as any).contractOccupant?.count) return tenant;
-    const roommateCount = await this.prisma.contractOccupant.count({
-      where: {
-        contract: {
-          businessId: this.requireBusinessId(user),
-          representativeTenantId: id,
-          status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] },
+    const businessId = this.requireBusinessId(user);
+    const [roommateCount, activeContracts, roommates] = await Promise.all([
+      this.prisma.contractOccupant.count({
+        where: {
+          contract: {
+            businessId,
+            representativeTenantId: id,
+            status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] },
+          },
+          status: { not: OccupantStatus.LEFT },
         },
-        status: { not: OccupantStatus.LEFT },
-      },
-    });
-    const activeContracts = await this.getEffectiveContractsForTenants(this.requireBusinessId(user), [id]);
+      }),
+      this.getEffectiveContractsForTenants(businessId, [id]),
+      this.getRoommatesForTenant(businessId, id),
+    ]);
     const roomsByTenantId = this.mapCurrentRoomsByTenant(activeContracts);
-    return { ...tenant, roommateCount, currentRooms: roomsByTenantId.get(id) ?? [] };
+    return { ...tenant, roommateCount, currentRooms: roomsByTenantId.get(id) ?? [], roommates };
   }
 
   async createTenant(user: AuthUser, body: any) {
@@ -184,6 +188,57 @@ export class TenantsService extends BaseCrudService {
         room: { select: { id: true, roomCode: true, roomArea: true } },
         contractRooms: { select: { room: { select: { id: true, roomCode: true, roomArea: true } } } },
       },
+    });
+  }
+
+  private async getRoommatesForTenant(businessId: string, tenantId: string) {
+    const contracts = await this.prisma.rentalContract.findMany({
+      where: {
+        businessId,
+        representativeTenantId: tenantId,
+        status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] },
+      },
+      select: {
+        id: true,
+        status: true,
+        startDate: true,
+        endDate: true,
+        room: { select: { id: true, roomCode: true, roomArea: true } },
+        contractRooms: { select: { room: { select: { id: true, roomCode: true, roomArea: true } } } },
+        occupants: {
+          where: { status: { not: OccupantStatus.LEFT } },
+          orderBy: { createdAt: 'asc' },
+          select: {
+            id: true,
+            roomId: true,
+            fullName: true,
+            phone: true,
+            identityNumber: true,
+            dateOfBirth: true,
+            permanentAddress: true,
+            occupantType: true,
+            relationship: true,
+            moveInDate: true,
+            moveOutDate: true,
+            status: true,
+            createdAt: true,
+            updatedAt: true,
+          },
+        },
+      },
+    });
+
+    return contracts.flatMap((contract) => {
+      const rooms = contract.contractRooms.length ? contract.contractRooms.map((item) => item.room) : [contract.room];
+      const roomById = new Map(rooms.map((room) => [room.id, room]));
+      return contract.occupants.map((occupant) => ({
+        ...occupant,
+        contractId: contract.id,
+        contractStatus: contract.status,
+        contractStartDate: contract.startDate,
+        contractEndDate: contract.endDate,
+        room: roomById.get(occupant.roomId) ?? null,
+      }));
     });
   }
 
