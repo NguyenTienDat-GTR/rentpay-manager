@@ -14,6 +14,12 @@ export class RoomsController {
     return this.rooms.list(user, query);
   }
 
+  @Get('check-code')
+  @Retryable()
+  checkCode(@CurrentUser() user: AuthUser, @Query('roomCode') roomCode: string, @Query('roomAreaId') roomAreaId: string, @Query('exceptId') exceptId?: string) {
+    return this.rooms.checkRoomCode(user, roomCode, roomAreaId, exceptId);
+  }
+
   @Get(':id')
   @Retryable()
   get(@CurrentUser() user: AuthUser, @Param('id') id: string) {

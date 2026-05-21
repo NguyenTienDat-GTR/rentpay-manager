@@ -27,7 +27,7 @@ export class PublicPortalService {
     const genericError = new BadRequestException('Không tìm thấy thông tin thanh toán phù hợp');
     const business = await this.prisma.business.findUnique({ where: { businessSlug: slug } });
     if (!business || business.status !== BusinessStatus.ACTIVE) throw genericError;
-    const room = await this.prisma.room.findFirst({ where: { businessId: business.id, roomCode: body.roomCode } });
+    const room = await this.prisma.room.findFirst({ where: { businessId: business.id, roomCode: body.roomCode }, include: { roomArea: true } });
     if (!room) throw genericError;
     const contract = await this.prisma.rentalContract.findFirst({
       where: {
@@ -63,7 +63,7 @@ export class PublicPortalService {
     return {
       portalAccessToken,
       business: { businessName: business.businessName, businessSlug: business.businessSlug },
-      room: { roomCode: room.roomCode, name: room.name },
+      room: { roomCode: room.roomCode, roomArea: room.roomArea },
       charges: charges.map((charge) => ({
         ...charge,
         remainingAmount: Math.max(Number(charge.amountDue) - Number(charge.amountPaid), 0),

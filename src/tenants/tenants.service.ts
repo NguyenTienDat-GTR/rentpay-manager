@@ -181,14 +181,14 @@ export class TenantsService extends BaseCrudService {
       },
       select: {
         representativeTenantId: true,
-        room: { select: { id: true, roomCode: true, name: true } },
-        contractRooms: { select: { room: { select: { id: true, roomCode: true, name: true } } } },
+        room: { select: { id: true, roomCode: true, roomArea: true } },
+        contractRooms: { select: { room: { select: { id: true, roomCode: true, roomArea: true } } } },
       },
     });
   }
 
   private mapCurrentRoomsByTenant(contracts: Awaited<ReturnType<TenantsService['getEffectiveContractsForTenants']>>) {
-    const roomsByTenantId = new Map<string, Array<{ id: string; roomCode: string; name: string | null }>>();
+    const roomsByTenantId = new Map<string, Array<{ id: string; roomCode: string; roomArea: { name: string } | null }>>();
     for (const contract of contracts) {
       const existing = roomsByTenantId.get(contract.representativeTenantId) ?? [];
       const seen = new Set(existing.map((room) => room.id));

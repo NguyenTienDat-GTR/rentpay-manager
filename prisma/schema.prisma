@@ -182,6 +182,7 @@ model Business {
   users            User[]
   bankAccounts     BankAccount[]
   bankConnections  BankConnection[]
+  roomAreas        RoomArea[]
   rooms            Room[]
   tenants          Tenant[]
   contracts        RentalContract[]
@@ -237,12 +238,25 @@ model BankConnection {
   @@index([bankAccountId])
 }
 
+model RoomArea {
+  id          String   @id @default(cuid())
+  businessId  String
+  name        String
+  description String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  business    Business @relation(fields: [businessId], references: [id])
+  rooms       Room[]
+
+  @@unique([businessId, name])
+  @@index([businessId])
+}
+
 model Room {
   id             String             @id @default(cuid())
   businessId     String
+  roomAreaId     String
   roomCode       String
-  name           String?
-  floor          String?
   area           Decimal?           @db.Decimal(10, 2)
   baseRentAmount Decimal            @db.Decimal(14, 2)
   depositAmount  Decimal?           @db.Decimal(14, 2)
@@ -253,6 +267,7 @@ model Room {
   createdAt      DateTime           @default(now())
   updatedAt      DateTime           @updatedAt
   business       Business           @relation(fields: [businessId], references: [id])
+  roomArea       RoomArea           @relation(fields: [roomAreaId], references: [id])
   contracts      RentalContract[]
   contractRooms  RentalContractRoom[]
   occupants      ContractOccupant[]
@@ -260,8 +275,9 @@ model Room {
   payments       Payment[]
   notificationLogs NotificationLog[]
 
-  @@unique([businessId, roomCode])
+  @@unique([businessId, roomAreaId, roomCode])
   @@index([businessId, status])
+  @@index([roomAreaId])
 }
 
 model Tenant {

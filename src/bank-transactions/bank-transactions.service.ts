@@ -28,7 +28,7 @@ export class BankTransactionsService extends BaseCrudService {
       searchFields: ['transactionRef', 'description', 'accountNumber'],
       filterFields: ['classification', 'type', 'bankAccountId'],
       sortFields: ['amount', 'transactionTime', 'classification', 'createdAt'],
-      include: { bankAccount: true, matches: { include: { charge: true } } },
+      include: { bankAccount: true, matches: { include: { charge: { include: { room: { include: { roomArea: true } } } } } } },
     });
   }
 
@@ -40,7 +40,7 @@ export class BankTransactionsService extends BaseCrudService {
       searchFields: [],
       filterFields: ['matchStatus'],
       sortFields: ['confidence', 'createdAt'],
-      include: { transaction: true, charge: true },
+      include: { transaction: true, charge: { include: { room: { include: { roomArea: true } } } } },
     });
   }
 

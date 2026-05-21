@@ -29,7 +29,7 @@ export class ChargesService extends BaseCrudService {
         OR: [
           ...['title', 'paymentCode', 'transferContent'].map((field) => ({ [field]: search })),
           { room: { roomCode: search } },
-          { room: { name: search } },
+          { room: { roomArea: { name: search } } },
           { payerTenant: { is: { fullName: search } } },
           { payerTenant: { is: { phone: search } } },
         ],
@@ -59,7 +59,7 @@ export class ChargesService extends BaseCrudService {
     }
 
     const where = scopedWhere(user, and.length ? { AND: and } : {});
-    const include = { room: true, payerTenant: true, billingPeriod: true, bankAccount: true, items: true };
+    const include = { room: { include: { roomArea: true } }, payerTenant: true, billingPeriod: true, bankAccount: true, items: true };
     const [items, total] = await Promise.all([
       this.prisma.charge.findMany({
         where,
@@ -80,6 +80,7 @@ export class ChargesService extends BaseCrudService {
       roomId
         ? this.prisma.room.findFirst({
             where: { id: roomId, businessId },
+            include: { roomArea: true },
           })
         : null,
       this.prisma.billingPeriod.findMany({
@@ -133,7 +134,7 @@ export class ChargesService extends BaseCrudService {
             })),
           },
         },
-        include: { room: true, payerTenant: true, billingPeriod: true, bankAccount: true, items: true },
+        include: { room: { include: { roomArea: true } }, payerTenant: true, billingPeriod: true, bankAccount: true, items: true },
       }),
     );
     await this.changed(user, 'CREATE_CHARGE', charge.id, businessId);
@@ -179,7 +180,7 @@ export class ChargesService extends BaseCrudService {
               })),
             },
           },
-          include: { room: true, payerTenant: true, billingPeriod: true, bankAccount: true, items: true },
+          include: { room: { include: { roomArea: true } }, payerTenant: true, billingPeriod: true, bankAccount: true, items: true },
         });
       });
       await this.changed(user, 'UPDATE_CHARGE', id, updated.businessId);
@@ -315,9 +316,9 @@ export class ChargesService extends BaseCrudService {
         AND: [{ OR: [{ roomId }, { contractRooms: { some: { roomId } } }] }],
       },
       include: {
-        room: true,
+        room: { include: { roomArea: true } },
         representativeTenant: true,
-        contractRooms: { include: { room: true } },
+        contractRooms: { include: { room: { include: { roomArea: true } } } },
         occupants: { where: { status: { not: OccupantStatus.LEFT } } },
       },
       orderBy: { startDate: 'desc' },
@@ -344,7 +345,7 @@ export class ChargesService extends BaseCrudService {
   }
 
   async qr(user: AuthUser, id: string) {
-    const charge = await this.get('charge', user, id, { bankAccount: true, room: true });
+    const charge = await this.get('charge', user, id, { bankAccount: true, room: { include: { roomArea: true } } });
     return this.renderQr(charge, user.sub);
   }
 

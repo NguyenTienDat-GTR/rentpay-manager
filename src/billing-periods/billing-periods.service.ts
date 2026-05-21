@@ -51,7 +51,7 @@ export class BillingPeriodsService extends BaseCrudService {
     if (!bankAccount) throw new BadRequestException('Default bank account is required');
     const contracts = await this.prisma.rentalContract.findMany({
       where: { businessId: period.businessId, status: ContractStatus.ACTIVE },
-      include: { room: true, representativeTenant: true },
+      include: { room: { include: { roomArea: true } }, representativeTenant: true },
     });
 
     const created: any[] = [];

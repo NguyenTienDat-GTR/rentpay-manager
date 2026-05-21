@@ -1,4 +1,4 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+﻿import { BadRequestException, Injectable } from '@nestjs/common';
 import { ChargeType, ContractStatus, OccupantStatus, OccupantType, RoomStatus, TenantStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { BaseCrudService } from '../common/base-crud.service';
@@ -26,13 +26,13 @@ export class ContractsService extends BaseCrudService {
       searchFields: ['note'],
       filterFields: ['status', 'roomId', 'representativeTenantId'],
       sortFields: ['startDate', 'endDate', 'rentAmount', 'status', 'createdAt'],
-      include: { room: true, representativeTenant: true, contractRooms: { include: { room: true } }, occupants: true },
+      include: { room: { include: { roomArea: true } }, representativeTenant: true, contractRooms: { include: { room: { include: { roomArea: true } } } }, occupants: true },
     });
   }
 
   async getContract(user: AuthUser, id: string) {
     await this.syncEffectiveActiveContracts(user);
-    return this.get('rentalContract', user, id, { room: true, contractRooms: { include: { room: true } }, representativeTenant: true, occupants: true });
+    return this.get('rentalContract', user, id, { room: { include: { roomArea: true } }, contractRooms: { include: { room: { include: { roomArea: true } } } }, representativeTenant: true, occupants: true });
   }
 
   async createContract(user: AuthUser, body: any) {
@@ -93,7 +93,7 @@ export class ContractsService extends BaseCrudService {
   }
 
   async activate(user: AuthUser, id: string) {
-    const contract = await this.get('rentalContract', user, id, { occupants: true, room: true, contractRooms: { include: { room: true } }, representativeTenant: true });
+    const contract = await this.get('rentalContract', user, id, { occupants: true, room: { include: { roomArea: true } }, contractRooms: { include: { room: { include: { roomArea: true } } } }, representativeTenant: true });
     const rooms = contract.contractRooms?.length ? contract.contractRooms.map((item: any) => item.room) : [contract.room];
     for (const room of rooms) await this.assertRoomCanReceiveActiveContract(contract.businessId, room.id, id);
     const activeOccupants = contract.occupants.filter((occupant: any) => occupant.status !== OccupantStatus.LEFT);
@@ -134,7 +134,7 @@ export class ContractsService extends BaseCrudService {
 
     const oldContract = await this.prisma.rentalContract.findFirst({
       where: { id, businessId },
-      include: { occupants: true, room: true, contractRooms: { include: { room: true } } },
+      include: { occupants: true, room: { include: { roomArea: true } }, contractRooms: { include: { room: { include: { roomArea: true } } } } },
     });
     if (!oldContract) throw new BadRequestException('Contract not found');
     if (oldContract.status !== ContractStatus.ACTIVE) throw new BadRequestException('Only ACTIVE contracts can be transferred');
@@ -536,7 +536,7 @@ export class ContractsService extends BaseCrudService {
     const tomorrow = addDays(startOfLocalDay(now), 1);
     const contracts = await this.prisma.rentalContract.findMany({
       where: { businessId, status: ContractStatus.ACTIVE, startDate: { lt: tomorrow } },
-      include: { occupants: true, room: true, contractRooms: { include: { room: true } }, representativeTenant: true },
+      include: { occupants: true, room: { include: { roomArea: true } }, contractRooms: { include: { room: { include: { roomArea: true } } } }, representativeTenant: true },
     });
     const pending = contracts.filter((contract) => {
       return contract.representativeTenant.status !== TenantStatus.STAYING || contract.occupants.some((occupant) => occupant.status === OccupantStatus.DEPOSITED);
@@ -581,7 +581,7 @@ export class ContractsService extends BaseCrudService {
 
     const reservedContracts = await this.prisma.rentalContract.findMany({
       where: { businessId, status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] } },
-      include: { room: true, contractRooms: { include: { room: true } } },
+      include: { room: { include: { roomArea: true } }, contractRooms: { include: { room: { include: { roomArea: true } } } } },
     });
     for (const contract of reservedContracts) {
       if (isEffectiveActiveContract(contract.status, contract.startDate)) continue;

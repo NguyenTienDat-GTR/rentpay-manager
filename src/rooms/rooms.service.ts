@@ -16,14 +16,7 @@ export class RoomsService extends BaseCrudService {
 
   async list(user: AuthUser, query: any) {
     if (query.availableForContract === 'true' || query.availableForContract === true) return this.listAvailableForContract(user, query);
-    const result = await super.listItems({
-      model: 'room',
-      user,
-      query,
-      searchFields: ['roomCode', 'name', 'floor', 'note'],
-      filterFields: ['status', 'floor'],
-      sortFields: ['roomCode', 'baseRentAmount', 'area', 'status', 'currentOccupantCount', 'createdAt'],
-    });
+    const result = await this.listRooms(user, query);
     const ids = result.items.map((item: any) => item.id).filter(Boolean);
     if (!ids.length) return result;
     const currentTenantsByRoom = await this.getCurrentTenantsByRoom(user, ids);
@@ -31,6 +24,36 @@ export class RoomsService extends BaseCrudService {
       ...result,
       items: result.items.map((item: any) => ({ ...item, currentTenants: currentTenantsByRoom.get(item.id) ?? [] })),
     };
+  }
+
+  private async listRooms(user: AuthUser, query: any) {
+    const businessId = requireBusinessId(user);
+    const { page, take, skip } = pagination(query);
+    const where: Prisma.RoomWhereInput = {
+      businessId,
+      ...(query.status ? { status: query.status } : {}),
+      ...(query.roomAreaId ? { roomAreaId: String(query.roomAreaId) } : {}),
+      ...(query.search
+        ? {
+            OR: [
+              { roomCode: containsInsensitive(query.search) },
+              { note: containsInsensitive(query.search) },
+              { roomArea: { name: containsInsensitive(query.search) } },
+            ],
+          }
+        : {}),
+    };
+    const [items, total] = await Promise.all([
+      this.prisma.room.findMany({
+        where,
+        include: { roomArea: true },
+        skip,
+        take,
+        orderBy: orderBy(query, ['roomCode', 'baseRentAmount', 'area', 'status', 'currentOccupantCount', 'createdAt'], 'roomCode'),
+      }),
+      this.prisma.room.count({ where }),
+    ]);
+    return { items, meta: { page, take, total, pages: Math.ceil(total / take) } };
   }
 
   private async listAvailableForContract(user: AuthUser, query: any) {
@@ -44,14 +67,13 @@ export class RoomsService extends BaseCrudService {
           contract: { status: { in: [ContractStatus.PENDING, ContractStatus.ACTIVE] } },
         },
       },
-      ...(query.floor ? { floor: String(query.floor) } : {}),
+      ...(query.roomAreaId ? { roomAreaId: String(query.roomAreaId) } : {}),
       ...(query.search
         ? {
             OR: [
               { roomCode: containsInsensitive(query.search) },
-              { name: containsInsensitive(query.search) },
-              { floor: containsInsensitive(query.search) },
               { note: containsInsensitive(query.search) },
+              { roomArea: { name: containsInsensitive(query.search) } },
             ],
           }
         : {}),
@@ -59,6 +81,7 @@ export class RoomsService extends BaseCrudService {
     const [items, total] = await Promise.all([
       this.prisma.room.findMany({
         where,
+        include: { roomArea: true },
         skip,
         take,
         orderBy: orderBy(query, ['roomCode', 'baseRentAmount', 'area', 'status', 'currentOccupantCount', 'createdAt'], 'roomCode'),
@@ -70,8 +93,8 @@ export class RoomsService extends BaseCrudService {
 
   async createRoom(user: AuthUser, body: any) {
     const businessId = requireBusinessId(user, body.businessId);
-    const data = this.normalizeCreateData(body, businessId);
-    const duplicate = await this.findDuplicateRoom(businessId, data.roomCode, data.floor, body.roomCode);
+    const data = await this.normalizeCreateData(body, businessId);
+    const duplicate = await this.findDuplicateRoom(businessId, data.roomAreaId, data.roomCode);
     if (duplicate) return { ...duplicate, alreadyExists: true };
     const room = await this.createRoomRecord(data);
     await this.changed(user, 'CREATE_ROOM', room.id);
@@ -80,11 +103,11 @@ export class RoomsService extends BaseCrudService {
 
   async updateRoom(user: AuthUser, id: string, body: any) {
     const current = await this.get('room', user, id);
-    const data = this.normalizeUpdateData(body, current);
+    const data = await this.normalizeUpdateData(body, current);
     await this.assertAllowedStatusChange(current, data.status);
-    if (data.roomCode && data.roomCode !== current.roomCode) {
-      const duplicate = await this.findDuplicateRoom(current.businessId, data.roomCode, data.floor ?? current.floor, body.roomCode ?? current.roomCode, id);
-      if (duplicate) throw new ConflictException('Room code already exists in this floor/area');
+    if ((data.roomCode && data.roomCode !== current.roomCode) || (data.roomAreaId && data.roomAreaId !== current.roomAreaId)) {
+      const duplicate = await this.findDuplicateRoom(current.businessId, data.roomAreaId ?? current.roomAreaId, data.roomCode ?? current.roomCode, id);
+      if (duplicate) throw new ConflictException('Room code already exists in this room area');
     }
     const room = await this.prisma.room.update({ where: { id }, data });
     await this.changed(user, 'UPDATE_ROOM', id);
@@ -105,19 +128,27 @@ export class RoomsService extends BaseCrudService {
     return this.updateRoom(user, id, { status });
   }
 
+  async checkRoomCode(user: AuthUser, roomCode: unknown, roomAreaId: unknown, exceptId?: string) {
+    const businessId = requireBusinessId(user);
+    const area = await this.resolveRoomArea(businessId, roomAreaId);
+    const normalizedCode = buildRoomCode(roomCode, area.name);
+    const duplicate = normalizedCode ? await this.findDuplicateRoom(businessId, area.id, normalizedCode, exceptId) : null;
+    return { exists: Boolean(duplicate), room: duplicate };
+  }
+
   private async changed(user: AuthUser, action: string, id: string) {
     if (user.businessId) await this.redis.del(`dashboard:${user.businessId}:*`);
     await this.audit.log({ businessId: user.businessId, userId: user.sub, action, entity: 'Room', entityId: id });
   }
 
-  private normalizeCreateData(body: any, businessId: string) {
+  private async normalizeCreateData(body: any, businessId: string) {
     this.assertValidRoomOccupancy(body.maxOccupants);
     this.assertRoomStatusCanBeSetByRoomApi(body.status);
+    const roomArea = await this.resolveRoomArea(businessId, body.roomAreaId);
     return {
       businessId,
-      roomCode: buildRoomCode(body.roomCode, body.floor),
-      name: body.name,
-      floor: trimOptional(body.floor),
+      roomAreaId: roomArea.id,
+      roomCode: buildRoomCode(body.roomCode, roomArea.name),
       area: body.area,
       baseRentAmount: body.baseRentAmount,
       maxOccupants: body.maxOccupants == null || body.maxOccupants === '' ? 10 : Number(body.maxOccupants),
@@ -127,15 +158,19 @@ export class RoomsService extends BaseCrudService {
     };
   }
 
-  private normalizeUpdateData(body: any, current: any) {
+  private async normalizeUpdateData(body: any, current: any) {
     this.assertValidRoomOccupancy(body.maxOccupants);
     this.assertRoomStatusCanBeSetByRoomApi(body.status);
     const data = { ...body };
     delete data.businessId;
     delete data.depositAmount;
-    const nextFloor = body.floor !== undefined ? body.floor : current.floor;
-    if (body.roomCode !== undefined || body.floor !== undefined) data.roomCode = buildRoomCode(body.roomCode ?? current.roomCode, nextFloor);
-    if (body.floor !== undefined) data.floor = trimOptional(body.floor);
+    delete data.name;
+    delete data.floor;
+    if (body.roomCode !== undefined || body.roomAreaId !== undefined) {
+      const roomArea = await this.resolveRoomArea(current.businessId, body.roomAreaId ?? current.roomAreaId);
+      data.roomAreaId = roomArea.id;
+      data.roomCode = buildRoomCode(body.roomCode ?? current.roomCode, roomArea.name);
+    }
     if (body.maxOccupants !== undefined && body.maxOccupants !== '') data.maxOccupants = Number(body.maxOccupants);
     if (body.maxOccupants === '') delete data.maxOccupants;
     return data;
@@ -164,17 +199,23 @@ export class RoomsService extends BaseCrudService {
     }
   }
 
-  private async findDuplicateRoom(businessId: string, roomCode: string, floor: string | null, rawRoomCode: unknown, exceptId?: string) {
-    const rawCode = normalizeCodePart(rawRoomCode);
+  private async resolveRoomArea(businessId: string, roomAreaId: unknown) {
+    const areaId = trimOptional(roomAreaId);
+    if (!areaId) throw new BadRequestException('roomAreaId is required');
+    const area = await this.prisma.roomArea.findFirst({ where: { id: areaId, businessId } });
+    if (!area) throw new BadRequestException('Room area not found');
+    return area;
+  }
+
+  private async findDuplicateRoom(businessId: string, roomAreaId: string, roomCode: string, exceptId?: string) {
     return this.prisma.room.findFirst({
       where: {
         businessId,
+        roomAreaId,
+        roomCode,
         ...(exceptId ? { id: { not: exceptId } } : {}),
-        OR: [
-          { roomCode },
-          ...(floor && rawCode ? [{ floor, roomCode: rawCode }] : []),
-        ],
       },
+      include: { roomArea: true },
     });
   }
 
@@ -183,7 +224,7 @@ export class RoomsService extends BaseCrudService {
       return await this.prisma.room.create({ data });
     } catch (error) {
       if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-        const duplicate = await this.prisma.room.findFirst({ where: { businessId: data.businessId, roomCode: data.roomCode } });
+        const duplicate = await this.prisma.room.findFirst({ where: { businessId: data.businessId, roomAreaId: data.roomAreaId, roomCode: data.roomCode } });
         if (duplicate) return { ...duplicate, alreadyExists: true };
       }
       throw error;
@@ -228,13 +269,18 @@ export class RoomsService extends BaseCrudService {
   }
 }
 
-function buildRoomCode(roomCode: unknown, floor: unknown) {
+function buildRoomCode(roomCode: unknown, roomAreaName: unknown) {
   const roomPart = normalizeCodePart(roomCode);
-  const floorPart = normalizeCodePart(floor);
+  const areaPart = normalizeCodePart(roomAreaName);
   if (!roomPart) throw new BadRequestException('roomCode is required');
-  if (!floorPart) throw new BadRequestException('floor or area is required');
-  if (roomPart === floorPart || roomPart.startsWith(`${floorPart}-`)) return roomPart;
-  return `${floorPart}-${roomPart}`;
+  if (!areaPart) throw new BadRequestException('roomArea name is required');
+  if (roomPart === areaPart || roomPart.startsWith(`${areaPart}-`)) return roomPart;
+  return `${areaPart}-${roomCodeSuffix(roomPart)}`;
+}
+
+function roomCodeSuffix(roomCode: string) {
+  const parts = roomCode.split('-').filter(Boolean);
+  return parts[parts.length - 1] ?? roomCode;
 }
 
 function normalizeCodePart(value: unknown) {
