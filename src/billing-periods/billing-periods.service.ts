@@ -46,7 +46,7 @@ export class BillingPeriodsService extends BaseCrudService {
 
   async generateMonthlyRentCharges(user: AuthUser, id: string) {
     const period = await this.get('billingPeriod', user, id);
-    if (period.status === BillingPeriodStatus.LOCKED) throw new BadRequestException('Billing period is locked');
+    if (period.status !== BillingPeriodStatus.OPEN) throw new BadRequestException('Billing period must be open');
     const bankAccount = await this.prisma.bankAccount.findFirst({ where: { businessId: period.businessId, isDefault: true, status: 'ACTIVE' } });
     if (!bankAccount) throw new BadRequestException('Default bank account is required');
     const contracts = await this.prisma.rentalContract.findMany({
@@ -56,7 +56,14 @@ export class BillingPeriodsService extends BaseCrudService {
 
     const created: any[] = [];
     for (const contract of contracts) {
-      const exists = await this.prisma.charge.findFirst({ where: { contractId: contract.id, billingPeriodId: id, chargeType: ChargeType.ROOM_RENT } });
+      const exists = await this.prisma.charge.findFirst({
+        where: {
+          contractId: contract.id,
+          billingPeriodId: id,
+          status: { not: ChargeStatus.CANCELLED },
+          OR: [{ chargeType: ChargeType.ROOM_RENT }, { items: { some: { chargeType: ChargeType.ROOM_RENT } } }],
+        },
+      });
       if (exists) continue;
       const hasPreviousRoomRent = await this.prisma.charge.findFirst({ where: { contractId: contract.id, chargeType: ChargeType.ROOM_RENT } });
       const paidDepositAmount = hasPreviousRoomRent ? 0 : await this.getPaidDepositAmount(contract.id);
@@ -78,7 +85,17 @@ export class BillingPeriodsService extends BaseCrudService {
             paymentCode,
             transferContent: buildTransferContent(ChargeType.ROOM_RENT, paymentCode),
             status: amountDue === 0 ? ChargeStatus.PAID : ChargeStatus.UNPAID,
+            items: {
+              create: {
+                businessId: period.businessId,
+                chargeType: ChargeType.ROOM_RENT,
+                title: 'Tien phong',
+                amount: amountDue,
+                note: paidDepositAmount > 0 ? `Da tru tien coc da thu ${paidDepositAmount}` : null,
+              },
+            },
           },
+          include: { items: true },
         }),
       );
     }

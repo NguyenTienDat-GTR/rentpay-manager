@@ -360,6 +360,14 @@ export class ContractsService extends BaseCrudService {
         dueDate: contract.startDate,
         paymentCode,
         transferContent: buildTransferContent(ChargeType.DEPOSIT, paymentCode),
+        items: {
+          create: {
+            businessId,
+            chargeType: ChargeType.DEPOSIT,
+            title: 'Tien coc',
+            amount: depositAmount,
+          },
+        },
       },
     });
   }

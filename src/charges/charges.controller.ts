@@ -14,10 +14,16 @@ export class ChargesController {
     return this.charges.list(user, query);
   }
 
+  @Get('context')
+  @Retryable()
+  context(@CurrentUser() user: AuthUser, @Query('roomId') roomId?: string, @Query('billingPeriodId') billingPeriodId?: string) {
+    return this.charges.context(user, roomId, billingPeriodId);
+  }
+
   @Get(':id')
   @Retryable()
   get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.charges.get('charge', user, id, { room: true, payerTenant: true, payments: true, bankAccount: true });
+    return this.charges.get('charge', user, id, { room: true, payerTenant: true, payments: true, bankAccount: true, billingPeriod: true, items: true });
   }
 
   @Get(':id/qr')
