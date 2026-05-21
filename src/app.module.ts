@@ -15,6 +15,7 @@ import { UsersModule } from './users/users.module';
 import { BusinessesModule } from './businesses/businesses.module';
 import { BankAccountsModule } from './bank-accounts/bank-accounts.module';
 import { BankConnectionsModule } from './bank-connections/bank-connections.module';
+import { RoomAreasModule } from './room-areas/room-areas.module';
 import { RoomsModule } from './rooms/rooms.module';
 import { TenantsModule } from './tenants/tenants.module';
 import { ContractsModule } from './contracts/contracts.module';
@@ -40,6 +41,7 @@ import { NotificationLogsModule } from './notification-logs/notification-logs.mo
     BusinessesModule,
     BankAccountsModule,
     BankConnectionsModule,
+    RoomAreasModule,
     RoomsModule,
     TenantsModule,
     ContractsModule,

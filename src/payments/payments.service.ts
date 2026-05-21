@@ -26,7 +26,7 @@ export class PaymentsService extends BaseCrudService {
       searchFields: ['note'],
       filterFields: ['method', 'status', 'collectedBy'],
       sortFields: ['amount', 'paidAt', 'method', 'createdAt'],
-      include: { charge: true, room: true, tenant: true, collector: { select: { id: true, fullName: true, phone: true } } },
+      include: { charge: true, room: { include: { roomArea: true } }, tenant: true, collector: { select: { id: true, fullName: true, phone: true } } },
     });
   }
 

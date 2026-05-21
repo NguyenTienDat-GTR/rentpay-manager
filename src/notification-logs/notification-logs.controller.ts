@@ -20,7 +20,7 @@ export class NotificationLogsController extends BaseCrudService {
       searchFields: [],
       filterFields: ['action', 'createdBy'],
       sortFields: ['createdAt', 'action'],
-      include: { charge: true, tenant: true, room: true, creator: { select: { id: true, fullName: true, phone: true } } },
+      include: { charge: true, tenant: true, room: { include: { roomArea: true } }, creator: { select: { id: true, fullName: true, phone: true } } },
     });
   }
 }

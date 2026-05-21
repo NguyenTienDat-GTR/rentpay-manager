@@ -22,14 +22,14 @@ export class ReportsService {
     if (!user.businessId) throw new BadRequestException('Report requires business user');
     return this.prisma.charge.findMany({
       where: { businessId: user.businessId, status: { in: [ChargeStatus.UNPAID, ChargeStatus.PARTIAL] } },
-      include: { room: true, payerTenant: true },
+      include: { room: { include: { roomArea: true } }, payerTenant: true },
       orderBy: { dueDate: 'asc' },
     });
   }
 
   payments(user: AuthUser) {
     if (!user.businessId) throw new BadRequestException('Report requires business user');
-    return this.prisma.payment.findMany({ where: { businessId: user.businessId }, include: { charge: true, room: true, tenant: true }, orderBy: { paidAt: 'desc' } });
+    return this.prisma.payment.findMany({ where: { businessId: user.businessId }, include: { charge: true, room: { include: { roomArea: true } }, tenant: true }, orderBy: { paidAt: 'desc' } });
   }
 
   bankTransactions(user: AuthUser) {
