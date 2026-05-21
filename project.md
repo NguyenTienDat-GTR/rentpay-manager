@@ -408,3 +408,4 @@ API mặc định chạy tại `http://localhost:5000/api`. Docker compose kèm 
 - Khi đổi Prisma schema/migration/runtime guard: cập nhật mục domain/model và migration/schema guard.
 - Khi đổi env/script/Docker: cập nhật mục cách chạy/build/test.
 - Khi thêm realtime event hoặc cache key mới: cập nhật kiến trúc và flow liên quan.
+- Khi thêm/sửa enum hoặc message lỗi/exception trả về API: cần đồng bộ mapping tiếng Việt phía FE trong `FE/src/shared/utils/labels.ts` và `FE/src/shared/utils/messages.ts`.
