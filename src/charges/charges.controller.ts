@@ -23,7 +23,7 @@ export class ChargesController {
   @Get(':id')
   @Retryable()
   get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.charges.get('charge', user, id, { room: { include: { roomArea: true } }, payerTenant: true, payments: true, bankAccount: true, billingPeriod: true, items: true });
+    return this.charges.getCharge(user, id);
   }
 
   @Get(':id/qr')

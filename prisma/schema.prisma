@@ -99,6 +99,7 @@ enum ChargeStatus {
 enum PaymentMethod {
   BANK_TRANSFER
   CASH
+  CREDIT
 }
 
 enum PaymentStatus {
@@ -109,6 +110,32 @@ enum PaymentStatus {
 enum TransactionType {
   IN
   OUT
+}
+
+enum CreditLedgerType {
+  OVERPAYMENT
+  APPLY_TO_CHARGE
+  REFUND
+}
+
+enum CreditLedgerStatus {
+  POSTED
+  VOIDED
+}
+
+enum TenantCreditActivityType {
+  APPLY_TO_CHARGE
+  REFUND
+}
+
+enum TenantCreditActivityStatus {
+  POSTED
+  VOIDED
+}
+
+enum RefundMethod {
+  CASH
+  BANK_TRANSFER
 }
 
 enum TransactionClassification {
@@ -148,6 +175,7 @@ model User {
   auditLogs         AuditLog[]        @relation("AuditUser")
   collectedPayments Payment[]         @relation("PaymentCollector")
   notificationLogs  NotificationLog[] @relation("NotificationCreator")
+  tenantCreditActivities TenantCreditActivity[] @relation("TenantCreditActivityCreator")
 
   @@index([businessId])
   @@index([role])
@@ -192,6 +220,8 @@ model Business {
   charges          Charge[]
   chargeItems      ChargeItem[]
   payments         Payment[]
+  creditLedgers    CreditLedger[]
+  creditActivities TenantCreditActivity[]
   transactions     BankTransaction[]
   matches          PaymentMatch[]
   notificationLogs NotificationLog[]
@@ -215,6 +245,7 @@ model BankAccount {
   connections    BankConnection[]
   charges        Charge[]
   transactions   BankTransaction[]
+  refundCreditActivities TenantCreditActivity[] @relation("RefundOwnerBankAccount")
 
   @@index([businessId])
   @@index([bankCode])
@@ -273,6 +304,8 @@ model Room {
   occupants      ContractOccupant[]
   charges        Charge[]
   payments       Payment[]
+  creditLedgers  CreditLedger[]
+  creditActivities TenantCreditActivity[]
   notificationLogs NotificationLog[]
 
   @@unique([businessId, roomAreaId, roomCode])
@@ -296,6 +329,8 @@ model Tenant {
   representedContracts  RentalContract[]   @relation("RepresentativeTenant")
   charges               Charge[]
   payments              Payment[]
+  creditLedgers         CreditLedger[]
+  creditActivities      TenantCreditActivity[]
   notificationLogs      NotificationLog[]
 
   @@index([businessId, status])
@@ -324,6 +359,8 @@ model RentalContract {
   occupants              ContractOccupant[]
   charges                Charge[]
   payments               Payment[]
+  creditLedgers          CreditLedger[]
+  creditActivities       TenantCreditActivity[]
 
   @@index([businessId, status])
   @@index([roomId, status])
@@ -414,6 +451,10 @@ model Charge {
   items           ChargeItem[]
   payments        Payment[]
   matches         PaymentMatch[]
+  sourceCreditLedgers CreditLedger[] @relation("SourceChargeCreditLedgers")
+  targetCreditLedgers CreditLedger[] @relation("TargetChargeCreditLedgers")
+  sourceCreditActivities TenantCreditActivity[] @relation("SourceChargeCreditActivities")
+  targetCreditActivities TenantCreditActivity[] @relation("TargetChargeCreditActivities")
   notificationLogs NotificationLog[]
 
   @@index([businessId, status])
@@ -461,6 +502,8 @@ model Payment {
   tenant            Tenant?        @relation(fields: [tenantId], references: [id])
   collector         User?          @relation("PaymentCollector", fields: [collectedBy], references: [id])
   bankTransaction   BankTransaction? @relation(fields: [bankTransactionId], references: [id])
+  sourceCreditLedgers CreditLedger[] @relation("SourcePaymentCreditLedgers")
+  targetCreditLedgers CreditLedger[] @relation("TargetPaymentCreditLedgers")
 
   @@index([businessId, method, status])
   @@index([chargeId])
@@ -486,6 +529,8 @@ model BankTransaction {
   bankAccount     BankAccount               @relation(fields: [bankAccountId], references: [id])
   payments        Payment[]
   matches         PaymentMatch[]
+  creditLedgers   CreditLedger[]
+  creditActivities TenantCreditActivity[]
 
   @@unique([bankAccountId, transactionRef])
   @@index([businessId, classification])
@@ -506,6 +551,103 @@ model PaymentMatch {
   charge      Charge?            @relation(fields: [chargeId], references: [id])
 
   @@index([businessId, matchStatus])
+}
+
+model CreditLedger {
+  id                     String             @id @default(cuid())
+  activityId             String?
+  businessId             String
+  tenantId               String?
+  contractId             String?
+  roomId                 String
+  sourceChargeId         String?
+  targetChargeId         String?
+  sourcePaymentId        String?
+  targetPaymentId        String?
+  bankTransactionId      String?
+  type                   CreditLedgerType
+  status                 CreditLedgerStatus @default(POSTED)
+  amount                 Decimal            @db.Decimal(14, 2)
+  refundMethod           RefundMethod?
+  recipientBankName      String?
+  recipientAccountNumber String?
+  recipientAccountName   String?
+  transferContent        String?
+  transferredAt          DateTime?
+  bankMatchedAt          DateTime?
+  note                   String?
+  createdAt              DateTime           @default(now())
+  updatedAt              DateTime           @updatedAt
+  business               Business           @relation(fields: [businessId], references: [id])
+  tenant                 Tenant?            @relation(fields: [tenantId], references: [id])
+  contract               RentalContract?    @relation(fields: [contractId], references: [id])
+  room                   Room               @relation(fields: [roomId], references: [id])
+  sourceCharge           Charge?            @relation("SourceChargeCreditLedgers", fields: [sourceChargeId], references: [id])
+  targetCharge           Charge?            @relation("TargetChargeCreditLedgers", fields: [targetChargeId], references: [id])
+  sourcePayment          Payment?           @relation("SourcePaymentCreditLedgers", fields: [sourcePaymentId], references: [id])
+  targetPayment          Payment?           @relation("TargetPaymentCreditLedgers", fields: [targetPaymentId], references: [id])
+  bankTransaction        BankTransaction?   @relation(fields: [bankTransactionId], references: [id])
+  activity               TenantCreditActivity? @relation(fields: [activityId], references: [id], onDelete: SetNull)
+
+  @@index([activityId])
+  @@index([businessId, tenantId])
+  @@index([businessId, contractId])
+  @@index([businessId, roomId])
+  @@index([sourceChargeId, status])
+  @@index([targetChargeId])
+  @@index([sourcePaymentId, status])
+  @@index([targetPaymentId, status])
+  @@index([bankTransactionId])
+  @@index([type, status])
+}
+
+model TenantCreditActivity {
+  id                     String                     @id @default(cuid())
+  activityCode           String                     @unique
+  businessId             String
+  tenantId               String?
+  contractId             String?
+  roomId                 String
+  sourceChargeId         String?
+  targetChargeId         String?
+  ownerBankAccountId     String?
+  bankTransactionId      String?
+  type                   TenantCreditActivityType
+  status                 TenantCreditActivityStatus @default(POSTED)
+  amount                 Decimal                    @db.Decimal(14, 2)
+  refundMethod           RefundMethod?
+  recipientBankName      String?
+  recipientAccountNumber String?
+  recipientAccountName   String?
+  transferContent        String?
+  transferredAt          DateTime?
+  bankMatchedAt          DateTime?
+  note                   String?
+  createdBy              String?
+  createdAt              DateTime                   @default(now())
+  updatedAt              DateTime                   @updatedAt
+  business               Business                   @relation(fields: [businessId], references: [id])
+  tenant                 Tenant?                    @relation(fields: [tenantId], references: [id])
+  contract               RentalContract?            @relation(fields: [contractId], references: [id])
+  room                   Room                       @relation(fields: [roomId], references: [id])
+  sourceCharge           Charge?                    @relation("SourceChargeCreditActivities", fields: [sourceChargeId], references: [id])
+  targetCharge           Charge?                    @relation("TargetChargeCreditActivities", fields: [targetChargeId], references: [id])
+  creator                User?                      @relation("TenantCreditActivityCreator", fields: [createdBy], references: [id])
+  ownerBankAccount       BankAccount?               @relation("RefundOwnerBankAccount", fields: [ownerBankAccountId], references: [id])
+  bankTransaction        BankTransaction?           @relation(fields: [bankTransactionId], references: [id])
+  ledgers                CreditLedger[]
+
+  @@index([businessId, tenantId])
+  @@index([businessId, contractId])
+  @@index([businessId, roomId])
+  @@index([sourceChargeId])
+  @@index([targetChargeId])
+  @@index([ownerBankAccountId])
+  @@index([bankTransactionId])
+  @@index([createdBy])
+  @@index([type, status])
+  @@index([refundMethod])
+  @@index([createdAt])
 }
 
 model NotificationLog {

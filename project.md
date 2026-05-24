@@ -18,7 +18,7 @@ Tài liệu này mô tả trạng thái backend hiện tại để các agent/de
   - `RateLimitGuard`: mặc định read 300 req/phút, write 120 req/phút, public 60 req/phút; một số endpoint override.
   - `RetryInterceptor`: retry endpoint có `@Retryable()` khi lỗi transient.
 
-Module chính được import trong `AppModule`: Auth, Users, Businesses, BankAccounts, BankConnections, RoomAreas, Rooms, Tenants, Contracts, BillingPeriods, Charges, Payments, BankTransactions, Dashboard, Reports, PublicPortal, NotificationLogs, Audit, Prisma, Redis, Realtime.
+Module chính được import trong `AppModule`: Auth, Users, Businesses, BankAccounts, BankConnections, RoomAreas, Rooms, Tenants, Contracts, BillingPeriods, Charges, Payments, TenantCredits, TenantCreditActivities, BankTransactions, Dashboard, Reports, PublicPortal, NotificationLogs, Audit, Prisma, Redis, Realtime.
 
 ## 2. Domain/model chính
 
@@ -30,7 +30,12 @@ Các enum quan trọng:
 - `ContractStatus`: `PENDING`, `ACTIVE`, `EXPIRED`, `CANCELLED`, `TERMINATED`.
 - `ChargeType`: `ROOM_RENT`, `DEPOSIT`, `ELECTRICITY`, `WATER`, `PARKING`, `INTERNET`, `GARBAGE`, `CLEANING`, `DAMAGE_FEE`, `OTHER`.
 - `ChargeStatus`: `UNPAID`, `PARTIAL`, `PAID`, `OVERPAID`, `CANCELLED`.
-- `PaymentMethod`: `BANK_TRANSFER`, `CASH`.
+- `PaymentMethod`: `BANK_TRANSFER`, `CASH`, `CREDIT`.
+- `CreditLedgerType`: `OVERPAYMENT`, `APPLY_TO_CHARGE`, `REFUND`.
+- `CreditLedgerStatus`: `POSTED`, `VOIDED`.
+- `TenantCreditActivityType`: `APPLY_TO_CHARGE`, `REFUND`.
+- `TenantCreditActivityStatus`: `POSTED`, `VOIDED`.
+- `RefundMethod`: `CASH`, `BANK_TRANSFER`.
 - `TransactionClassification`: `RENT_MATCHED`, `SUSPICIOUS`, `OTHER`.
 - `PaymentMatchStatus`: `AUTO_MATCHED`, `NEEDS_REVIEW`, `IGNORED`.
 
@@ -47,7 +52,9 @@ Model chính:
 - `BillingPeriod`: kỳ tính tiền theo tháng/năm.
 - `Charge`: khoản phải thu, có `paymentCode` unique và `transferContent`.
 - `ChargeItem`: dòng chi tiết của `Charge`, cascade delete theo `Charge`.
-- `Payment`: khoản thanh toán tiền mặt hoặc chuyển khoản.
+- `Payment`: khoản thanh toán tiền mặt, chuyển khoản hoặc bút toán cấn trừ credit (`CREDIT`).
+- `CreditLedger`: sổ cái tiền dư theo tenant/contract/room/sourceCharge/sourcePayment. Entry `OVERPAYMENT` là số dương; `APPLY_TO_CHARGE` và `REFUND` là số âm; không xóa ledger mà dùng `status=VOIDED` để audit.
+- `TenantCreditActivity`: chứng từ/nhật ký nghiệp vụ cho mỗi lần cấn trừ hoặc hoàn tiền credit, có `activityCode`, người tạo, thông tin người nhận hoàn tiền, tài khoản ngân hàng chủ trọ dùng để hoàn và trạng thái đối soát giao dịch ra.
 - `BankAccount`, `BankConnection`, `BankTransaction`, `PaymentMatch`: tài khoản ngân hàng, kết nối mock, giao dịch và kết quả match.
 - `NotificationLog`: log hành động liên quan gửi/xem/copy/tải QR/public lookup.
 - `AuditLog`: audit nghiệp vụ nội bộ.
@@ -128,6 +135,17 @@ Model chính:
   - Không có mã nhưng description giống nội dung thuê/phòng/điện/nước => `SUSPICIOUS/NEEDS_REVIEW`.
   - Mã không tồn tại hoặc charge đã cancel => suspicious/needs review.
 - Khi payment hoặc bank transaction thay đổi: xóa cache dashboard và phát realtime event.
+
+### 4.5.1 Tiền dư, credit, cấn trừ và hoàn tiền
+
+- Payment vẫn là dòng tiền hoặc bút toán đã ghi nhận. `CASH`/`BANK_TRANSFER` là tiền thực nhận; `CREDIT` là bút toán nội bộ khi cấn trừ tiền dư sang khoản thu khác.
+- Recalculate charge hiện cap `amountPaid <= amountDue`. Phần tiền nhận vượt `amountDue` được ghi vào `CreditLedger` dạng `OVERPAYMENT` dương, gắn `sourceChargeId` và `sourcePaymentId`.
+- `creditBalance` của một charge nguồn là tổng signed ledger `POSTED` theo `sourceChargeId`. `overpaidAmount` là tổng lịch sử `OVERPAYMENT` còn posted. `remainingAmount = max(amountDue - amountPaid, 0)`.
+- Charge có payment vượt due và còn credit chưa xử lý sẽ có status `OVERPAID`; nếu credit đã được apply/refund hết thì charge về `PAID`.
+- `POST /api/tenant-credits/apply` tạo `TenantCreditActivity` type `APPLY_TO_CHARGE`, tạo `Payment` method `CREDIT` trên target charge, tạo ledger `APPLY_TO_CHARGE` âm trên source charge, tự sinh note mặc định để nhìn rõ khoản cấn trừ đi đâu, rồi recalculate cả source/target.
+- `POST /api/tenant-credits/refund` tạo `TenantCreditActivity` type `REFUND` và ledger `REFUND` âm. Mọi refund đều phải có người nhận, nội dung và thời điểm hoàn; riêng `BANK_TRANSFER` còn bắt buộc chọn `ownerBankAccountId` (tài khoản chủ trọ dùng để chuyển), ngân hàng người nhận và số tài khoản người nhận.
+- Webhook giao dịch `OUT` không tạo payment, nhưng sẽ thử link vào activity refund bank transfer nếu amount khớp, description chứa `transferContent` và đúng tài khoản chủ trọ đã chọn; khi khớp sẽ cập nhật cả `TenantCreditActivity.bankTransactionId/bankMatchedAt` và các `CreditLedger` liên quan. Khi tạo refund bank transfer cũng thử tìm giao dịch OUT tương ứng để link ngay trên đúng tài khoản đó.
+- Không cho hủy payment nguồn nếu overpayment từ payment đó đã được cấn trừ hoặc hoàn tiền; message trả rõ để tránh âm ledger.
 
 ### 4.6 Public payment portal
 
@@ -249,10 +267,10 @@ Tất cả endpoint bên dưới có prefix `/api`.
   - Response: `{ "createdCount": number, "items": Charge[] }`.
 - `GET /charges`: list khoản thu.
   - Query: `search`, `chargeType`, `status`, `billingPeriodId`, `roomId`, `billingMonth`, `billingYear`, `isOverdue=true|false`.
-  - Include: room/roomArea, payerTenant, billingPeriod, bankAccount, items.
+  - Include: room/roomArea, payerTenant, billingPeriod, bankAccount, items, và field tính toán `overpaidAmount`, `creditBalance`, `remainingAmount`.
 - `GET /charges/context?roomId=&billingPeriodId=`
   - Response: `room`, active `contract`, current `tenants`, `openPeriods`, `connectedBankAccounts`, `defaultBankAccount`, `hasRoomRentCharge`.
-- `GET /charges/:id`: chi tiết charge include payments/items.
+- `GET /charges/:id`: chi tiết charge include payments/items/sourceCreditLedgers/targetCreditLedgers và field tính toán credit.
 - `GET /charges/:id/qr`: rate-limit 60/phút/business-or-IP.
 - `POST /charges`
   - Body chính: `roomId`, `contractId?`, `payerTenantId?`, `billingPeriodId?`, `bankAccountId`, `title?`, `dueDate?`, `paymentLink?`, `items`.
@@ -264,6 +282,27 @@ Tất cả endpoint bên dưới có prefix `/api`.
   - Body: `{ "chargeId": "...", "amount": 100000, "paidAt": "2026-05-22T00:00:00.000Z", "note": "..." }`
   - Response: `{ payment, charge }`.
 - `PATCH /payments/:id/cancel`: hủy payment và recalculate charge.
+
+### 5.5.1 Tenant credits
+
+- `GET /tenant-credits`: list ledger credit.
+  - Query: `tenantId`, `contractId`, `roomId`, `sourceChargeId`, `status`, `type`, `page`, `limit`, `sortBy`, `sortOrder`.
+  - Include: `sourceCharge`, `targetCharge`, `sourcePayment`, `targetPayment`, `bankTransaction`.
+- `GET /tenant-credits/summary`: tổng credit theo filter.
+  - Query: `tenantId`, `contractId`, `roomId`, `sourceChargeId`.
+  - Response: `{ creditBalance, overpaidAmount, appliedAmount, refundedAmount }`.
+- `POST /tenant-credits/apply`
+  - Body: `{ "sourceChargeId": "...", "targetChargeId": "...", "amount": 100000, "note": "..." }`; `amount` optional, mặc định lấy min(creditBalance, target remaining).
+  - Tạo payment `CREDIT` trên target charge và ledger `APPLY_TO_CHARGE` âm trên source charge.
+- `POST /tenant-credits/refund`
+  - Body CASH: `{ "sourceChargeId": "...", "amount": 100000, "refundMethod": "CASH", "recipientAccountName": "Nguyễn Văn A", "transferContent": "Hoàn tiền dư tháng 5", "transferredAt": "2026-05-24T10:30:00+07:00", "note": "..." }`.
+  - Body BANK_TRANSFER: thêm `ownerBankAccountId`, `recipientBankName`, `recipientAccountNumber`; response trả `activity`, `ledgers`, `sourceCharge`, `bankTransaction`.
+  - Body BANK_TRANSFER yêu cầu thêm `recipientBankName`, `recipientAccountNumber`, `recipientAccountName`, `transferContent`, `transferredAt`.
+  - Tạo activity + ledger `REFUND` âm và tự link `bankTransactionId` nếu tìm được giao dịch OUT khớp.
+- `GET /tenant-credit-activities`: list hoạt động xử lý credit.
+  - Query: `type`, `sourceChargeId`, `tenantId`, `contractId`, `roomId`, `refundMethod`, `status`, `bankMatched=true|false`, `bankMatchedState=BANK_MATCHED|BANK_UNMATCHED|BANK_NOT_REQUIRED`, `fromDate/toDate`, `createdAtFrom/createdAtTo`, `search`, `page`, `limit`, `sortBy`, `sortOrder`.
+  - Include: source/target charge, tenant, contract, room/roomArea, creator, bank transaction, ledgers.
+- `GET /tenant-credit-activities/:id`: chi tiết activity kèm các ledger allocation.
 
 ### 5.6 Ngân hàng và webhook
 
@@ -287,9 +326,9 @@ Tất cả endpoint bên dưới có prefix `/api`.
 
 - `GET /dashboard/summary`
   - Query range: `fromDate/toDate`, hoặc `periodType=year|quarter|month`, `year`, `quarter`, `month`.
-  - Response gồm tổng phòng, phòng occupied/deposited/available/maintenance, current occupants, active contracts, totalDue/Collected/Debt, cash/bank collected, suspicious/other transactions, overdue, recentTransactions, debtByRoom.
-- `GET /reports/collection-summary`: tổng charge/payment theo method.
-- `GET /reports/debt`: charge còn nợ.
+  - Response gồm tổng phòng, phòng occupied/deposited/available/maintenance, current occupants, active contracts, totalDue/Collected/Debt, cash/bank collected, creditApplied, creditBalance, overpaidAmount, suspicious/other transactions, overdue, recentTransactions, debtByRoom.
+- `GET /reports/collection-summary`: tổng charge/payment theo method, thêm `totalCollected`, `creditBalance`, `overpaidAmount`.
+- `GET /reports/debt`: charge còn nợ, có `remainingAmount`, `creditBalance`, `overpaidAmount`.
 - `GET /reports/payments`: danh sách payment.
 - `GET /reports/bank-transactions`: danh sách bank transaction.
 - `GET /reports/export-excel`: tải `rentpay-report.xlsx`, rate-limit 10/phút.
@@ -299,7 +338,7 @@ Tất cả endpoint bên dưới có prefix `/api`.
 - `GET /public/pay/:businessSlug`: public business info.
 - `POST /public/pay/:businessSlug/lookup`
   - Body: `{ "roomCode": "A-101", "representativePhone": "0912345678" }`
-  - Response có `portalAccessToken`, business, room, charges.
+  - Response có `portalAccessToken`, business, room, charges kèm `remainingAmount`, `creditBalance`, `overpaidAmount`.
 - `GET /public/pay/:businessSlug/charges/:chargeId/qr`
   - Header: `X-Portal-Access-Token: <portalAccessToken>`.
 
@@ -339,13 +378,16 @@ Migration hiện có:
 - `20260520133100_sync_deposited_room_status`
 - `20260521110000_add_charge_items`
 - `20260521143000_add_room_areas`
+- `20260522060000_add_tenant_credit_ledger`
+- `20260522073000_add_tenant_credit_activities`
 
 Ngoài migration, `PrismaService.onModuleInit()` còn có runtime schema guard:
 
 - `ensureChargeItemsTable()`: tạo bảng `ChargeItem` nếu thiếu, backfill mỗi `Charge` thành một `ChargeItem`, tạo index và foreign key nếu chưa có.
 - `ensureRoomAreasSchema()`: tạo bảng `RoomArea`, thêm `Room.roomAreaId`, backfill khu phòng từ `Room.floor` hoặc prefix `roomCode`, drop unique cũ `Room_businessId_roomCode_key`, sync roomCode theo khu, tạo unique mới `(businessId, roomAreaId, roomCode)`, set `roomAreaId` not null, drop cột cũ `Room.name`, `Room.floor`.
+- `ensureTenantCreditLedgerSchema()`: thêm enum/payment method credit nếu thiếu, tạo bảng `CreditLedger`, `TenantCreditActivity`, foreign key và index phục vụ tiền dư/cấn trừ/hoàn tiền khi môi trường chưa chạy migration; backfill activity cho ledger apply/refund cũ.
 
-Điểm cần lưu ý: runtime guard dùng raw SQL và chạy mỗi lần app init. Khi đổi schema liên quan `ChargeItem`, `RoomArea`, `Room.roomAreaId`, cần cập nhật cả migration lẫn guard hoặc cân nhắc bỏ guard sau khi database production đã đồng nhất.
+Điểm cần lưu ý: runtime guard dùng raw SQL và chạy mỗi lần app init. Khi đổi schema liên quan `ChargeItem`, `RoomArea`, `Room.roomAreaId`, `CreditLedger`, `TenantCreditActivity`, cần cập nhật cả migration lẫn guard hoặc cân nhắc bỏ guard sau khi database production đã đồng nhất.
 
 ## 8. Cách chạy, build, test
 

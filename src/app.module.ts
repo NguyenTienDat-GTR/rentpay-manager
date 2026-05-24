@@ -27,6 +27,8 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { ReportsModule } from './reports/reports.module';
 import { PublicPortalModule } from './public-portal/public-portal.module';
 import { NotificationLogsModule } from './notification-logs/notification-logs.module';
+import { TenantCreditsModule } from './tenant-credits/tenant-credits.module';
+import { TenantCreditActivitiesModule } from './tenant-credit-activities/tenant-credit-activities.module';
 
 @Module({
   imports: [
@@ -48,6 +50,8 @@ import { NotificationLogsModule } from './notification-logs/notification-logs.mo
     BillingPeriodsModule,
     ChargesModule,
     PaymentsModule,
+    TenantCreditsModule,
+    TenantCreditActivitiesModule,
     BankTransactionsModule,
     DashboardModule,
     ReportsModule,

@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { ChargeStatus, ContractStatus, OccupantStatus, PaymentMethod, PaymentStatus, RoomStatus, TransactionClassification } from '@prisma/client';
+import { ChargeStatus, ContractStatus, CreditLedgerStatus, CreditLedgerType, OccupantStatus, PaymentMethod, PaymentStatus, RoomStatus, TransactionClassification } from '@prisma/client';
 import dayjs = require('dayjs');
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { dateRange, toMoney } from '../common/utils/list-query';
@@ -18,9 +18,9 @@ export class DashboardService {
     if (cached) return cached;
 
     const chargeWhere = { businessId: user.businessId, ...(range ? { createdAt: range } : {}) };
-    const paymentWhere = { businessId: user.businessId, status: PaymentStatus.CONFIRMED, ...(range ? { paidAt: range } : {}) };
+    const paymentWhere = { businessId: user.businessId, status: PaymentStatus.CONFIRMED, method: { not: PaymentMethod.CREDIT }, ...(range ? { paidAt: range } : {}) };
     const effectiveContractWhere = { businessId: user.businessId, status: ContractStatus.ACTIVE, startDate: { lt: addDays(startOfLocalDay(new Date()), 1) } };
-    const [rooms, representativeContracts, occupants, activeContracts, chargeAgg, paymentAgg, cashAgg, bankAgg, suspiciousCount, otherCount, recentTransactions, debtByRoom] =
+    const [rooms, representativeContracts, occupants, activeContracts, chargeAgg, paymentAgg, cashAgg, bankAgg, creditAppliedAgg, creditBalanceAgg, overpaidAgg, suspiciousCount, otherCount, recentTransactions, debtByRoom] =
       await Promise.all([
         this.prisma.room.groupBy({ by: ['status'], where: { businessId: user.businessId }, _count: true }),
         this.prisma.rentalContract.findMany({ where: effectiveContractWhere, select: { representativeTenantId: true } }),
@@ -30,6 +30,9 @@ export class DashboardService {
         this.prisma.payment.aggregate({ where: paymentWhere, _sum: { amount: true }, _count: true }),
         this.prisma.payment.aggregate({ where: { ...paymentWhere, method: PaymentMethod.CASH }, _sum: { amount: true } }),
         this.prisma.payment.aggregate({ where: { ...paymentWhere, method: PaymentMethod.BANK_TRANSFER }, _sum: { amount: true } }),
+        this.prisma.payment.aggregate({ where: { businessId: user.businessId, status: PaymentStatus.CONFIRMED, method: PaymentMethod.CREDIT, ...(range ? { paidAt: range } : {}) }, _sum: { amount: true } }),
+        this.prisma.creditLedger.aggregate({ where: { businessId: user.businessId, status: CreditLedgerStatus.POSTED }, _sum: { amount: true } }),
+        this.prisma.creditLedger.aggregate({ where: { businessId: user.businessId, status: CreditLedgerStatus.POSTED, type: CreditLedgerType.OVERPAYMENT }, _sum: { amount: true } }),
         this.prisma.bankTransaction.count({ where: { businessId: user.businessId, classification: TransactionClassification.SUSPICIOUS } }),
         this.prisma.bankTransaction.count({ where: { businessId: user.businessId, classification: TransactionClassification.OTHER } }),
         this.prisma.bankTransaction.findMany({ where: { businessId: user.businessId }, take: 10, orderBy: { transactionTime: 'desc' } }),
@@ -56,6 +59,9 @@ export class DashboardService {
       totalDebt: Math.max(toMoney(chargeAgg._sum.amountDue) - toMoney(chargeAgg._sum.amountPaid), 0),
       cashCollected: toMoney(cashAgg._sum.amount),
       bankCollected: toMoney(bankAgg._sum.amount),
+      creditApplied: toMoney(creditAppliedAgg._sum.amount),
+      creditBalance: toMoney(creditBalanceAgg._sum.amount),
+      overpaidAmount: toMoney(overpaidAgg._sum.amount),
       suspiciousTransactions: suspiciousCount,
       otherTransactions: otherCount,
       overdueCount: overdueCharges.length,

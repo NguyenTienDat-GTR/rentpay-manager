@@ -6,6 +6,7 @@ import { AuthUser } from '../common/decorators/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RedisService } from '../redis/redis.service';
+import { TenantCreditsService } from '../tenant-credits/tenant-credits.service';
 
 @Injectable()
 export class PaymentsService extends BaseCrudService {
@@ -14,6 +15,7 @@ export class PaymentsService extends BaseCrudService {
     private readonly audit: AuditService,
     private readonly redis: RedisService,
     private readonly realtime: RealtimeService,
+    private readonly tenantCredits: TenantCreditsService,
   ) {
     super(prisma);
   }
@@ -48,15 +50,18 @@ export class PaymentsService extends BaseCrudService {
         note: body.note,
       },
     });
-    const updatedCharge = await this.recalculateCharge(charge.id);
+    const updatedCharge = await this.tenantCredits.recalculateCharge(charge.id);
     await this.afterPaymentChanged(user, charge.businessId, 'RECORD_CASH_PAYMENT', payment.id, { chargeId: charge.id });
     return { payment, charge: updatedCharge };
   }
 
   async cancelPayment(user: AuthUser, id: string) {
     const payment = await this.get('payment', user, id);
+    await this.tenantCredits.assertPaymentCanBeCancelled(id);
+    const sourceChargeIds = await this.tenantCredits.voidCreditPaymentLedgers(id);
     const updated = await this.prisma.payment.update({ where: { id }, data: { status: PaymentStatus.CANCELLED } });
-    const charge = await this.recalculateCharge(payment.chargeId);
+    for (const sourceChargeId of sourceChargeIds) await this.tenantCredits.recalculateCharge(sourceChargeId);
+    const charge = await this.tenantCredits.recalculateCharge(payment.chargeId);
     await this.afterPaymentChanged(user, payment.businessId, 'CANCEL_PAYMENT', id, { chargeId: payment.chargeId });
     return { payment: updated, charge };
   }
@@ -78,23 +83,10 @@ export class PaymentsService extends BaseCrudService {
         bankTransactionId: input.bankTransactionId,
       },
     });
-    const updatedCharge = await this.recalculateCharge(charge.id);
+    const updatedCharge = await this.tenantCredits.recalculateCharge(charge.id);
     await this.redis.del(`dashboard:${charge.businessId}:*`);
     this.realtime.emitBusiness(charge.businessId, 'payment.changed', { payment, charge: updatedCharge });
     return { payment, charge: updatedCharge };
-  }
-
-  async recalculateCharge(chargeId: string) {
-    const charge = await this.prisma.charge.findUnique({ where: { id: chargeId } });
-    if (!charge || charge.status === ChargeStatus.CANCELLED) return charge;
-    const aggregate = await this.prisma.payment.aggregate({
-      where: { chargeId, status: PaymentStatus.CONFIRMED },
-      _sum: { amount: true },
-    });
-    const amountPaid = Number(aggregate._sum.amount ?? 0);
-    const amountDue = Number(charge.amountDue);
-    const status = amountPaid === 0 ? ChargeStatus.UNPAID : amountPaid < amountDue ? ChargeStatus.PARTIAL : amountPaid === amountDue ? ChargeStatus.PAID : ChargeStatus.OVERPAID;
-    return this.prisma.charge.update({ where: { id: chargeId }, data: { amountPaid, status } });
   }
 
   private async afterPaymentChanged(user: AuthUser, businessId: string, action: string, paymentId: string, metadata?: unknown) {

@@ -7,6 +7,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { RealtimeService } from '../realtime/realtime.service';
 import { RedisService } from '../redis/redis.service';
 import { PaymentsService } from '../payments/payments.service';
+import { TenantCreditsService } from '../tenant-credits/tenant-credits.service';
 
 @Injectable()
 export class BankTransactionsService extends BaseCrudService {
@@ -16,6 +17,7 @@ export class BankTransactionsService extends BaseCrudService {
     private readonly audit: AuditService,
     private readonly redis: RedisService,
     private readonly realtime: RealtimeService,
+    private readonly tenantCredits: TenantCreditsService,
   ) {
     super(prisma);
   }
@@ -121,6 +123,8 @@ export class BankTransactionsService extends BaseCrudService {
     let paymentResult: unknown = null;
     if (classification === TransactionClassification.RENT_MATCHED && chargeId) {
       paymentResult = await this.payments.createBankTransferPayment({ chargeId, bankTransactionId: transaction.id, amount, paidAt: now });
+    } else if (type === TransactionType.OUT && amount > 0) {
+      paymentResult = await this.tenantCredits.autoLinkOutboundRefund(transaction.id);
     }
 
     await this.redis.del(`dashboard:${bankAccount.businessId}:*`);

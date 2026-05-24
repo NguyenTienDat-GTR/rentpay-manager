@@ -9,10 +9,16 @@ import { contains, orderBy, pagination } from '../common/utils/list-query';
 import { buildTransferContent, makePaymentCode } from '../common/utils/payment-code';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { TenantCreditsService } from '../tenant-credits/tenant-credits.service';
 
 @Injectable()
 export class ChargesService extends BaseCrudService {
-  constructor(prisma: PrismaService, private readonly audit: AuditService, private readonly redis: RedisService) {
+  constructor(
+    prisma: PrismaService,
+    private readonly audit: AuditService,
+    private readonly redis: RedisService,
+    private readonly tenantCredits: TenantCreditsService,
+  ) {
     super(prisma);
   }
 
@@ -71,7 +77,41 @@ export class ChargesService extends BaseCrudService {
       this.prisma.charge.count({ where }),
     ]);
 
-    return { items, meta: { page, take, total, pages: Math.ceil(total / take) } };
+    return { items: await this.tenantCredits.enrichCharges(items), meta: { page, take, total, pages: Math.ceil(total / take) } };
+  }
+
+  async getCharge(user: AuthUser, id: string) {
+    const charge = await this.get('charge', user, id, {
+      room: { include: { roomArea: true } },
+      payerTenant: true,
+      payments: true,
+      bankAccount: true,
+      billingPeriod: true,
+      items: true,
+      sourceCreditLedgers: { include: { targetCharge: true, sourcePayment: true, bankTransaction: true, activity: { include: { ownerBankAccount: true, bankTransaction: true, creator: true } } }, orderBy: { createdAt: 'desc' } },
+      targetCreditLedgers: { include: { sourceCharge: true, sourcePayment: true, activity: { include: { ownerBankAccount: true, bankTransaction: true, creator: true } } }, orderBy: { createdAt: 'desc' } },
+      sourceCreditActivities: {
+        include: {
+          targetCharge: { include: { room: { include: { roomArea: true } }, payerTenant: true } },
+          creator: { select: { id: true, fullName: true, phone: true, role: true } },
+          ownerBankAccount: true,
+          bankTransaction: true,
+          ledgers: { include: { sourcePayment: true, targetPayment: true, bankTransaction: true }, orderBy: { createdAt: 'asc' } },
+        },
+        orderBy: { createdAt: 'desc' },
+      },
+      targetCreditActivities: {
+        include: {
+          sourceCharge: { include: { room: { include: { roomArea: true } }, payerTenant: true } },
+          creator: { select: { id: true, fullName: true, phone: true, role: true } },
+          ownerBankAccount: true,
+          bankTransaction: true,
+          ledgers: { include: { sourcePayment: true, targetPayment: true, bankTransaction: true }, orderBy: { createdAt: 'asc' } },
+        },
+        orderBy: { createdAt: 'desc' },
+      },
+    });
+    return this.tenantCredits.enrichCharge(charge);
   }
 
   async context(user: AuthUser, roomId?: string, billingPeriodId?: string) {
@@ -138,7 +178,7 @@ export class ChargesService extends BaseCrudService {
       }),
     );
     await this.changed(user, 'CREATE_CHARGE', charge.id, businessId);
-    return charge;
+    return this.tenantCredits.enrichCharge(charge);
   }
 
   async updateCharge(user: AuthUser, id: string, body: any) {
@@ -184,11 +224,11 @@ export class ChargesService extends BaseCrudService {
         });
       });
       await this.changed(user, 'UPDATE_CHARGE', id, updated.businessId);
-      return updated;
+      return this.tenantCredits.enrichCharge(updated);
     }
     const updated = await super.update('charge', user, id, body);
     await this.changed(user, 'UPDATE_CHARGE', id, updated.businessId);
-    return updated;
+    return this.tenantCredits.enrichCharge(updated);
   }
 
   private async normalizeChargeInput(businessId: string, body: any) {

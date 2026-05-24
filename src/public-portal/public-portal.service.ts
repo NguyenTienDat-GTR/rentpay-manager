@@ -6,6 +6,7 @@ import { randomUUID } from 'crypto';
 import { ChargesService } from '../charges/charges.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { RedisService } from '../redis/redis.service';
+import { TenantCreditsService } from '../tenant-credits/tenant-credits.service';
 
 @Injectable()
 export class PublicPortalService {
@@ -15,6 +16,7 @@ export class PublicPortalService {
     private readonly config: ConfigService,
     private readonly redis: RedisService,
     private readonly charges: ChargesService,
+    private readonly tenantCredits: TenantCreditsService,
   ) {}
 
   async business(slug: string) {
@@ -60,13 +62,13 @@ export class PublicPortalService {
         metadata: { maskedPhone: maskPhone(body.representativePhone) },
       },
     });
+    const enrichedCharges = await this.tenantCredits.enrichCharges(charges);
     return {
       portalAccessToken,
       business: { businessName: business.businessName, businessSlug: business.businessSlug },
       room: { roomCode: room.roomCode, roomArea: room.roomArea },
-      charges: charges.map((charge) => ({
+      charges: enrichedCharges.map((charge) => ({
         ...charge,
-        remainingAmount: Math.max(Number(charge.amountDue) - Number(charge.amountPaid), 0),
         isOverdue: Boolean(charge.dueDate && charge.dueDate < new Date() && ([ChargeStatus.UNPAID, ChargeStatus.PARTIAL] as ChargeStatus[]).includes(charge.status)),
       })),
     };
