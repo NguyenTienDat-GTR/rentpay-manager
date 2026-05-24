@@ -14,9 +14,20 @@ export class BillingPeriodsController {
     return this.periods.list(user, query);
   }
 
+  @Get(':id')
+  @Retryable()
+  get(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.periods.getPeriod(user, id);
+  }
+
   @Post()
   create(@CurrentUser() user: AuthUser, @Body() body: any) {
     return this.periods.createPeriod(user, body);
+  }
+
+  @Patch(':id')
+  update(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: any) {
+    return this.periods.updatePeriod(user, id, body);
   }
 
   @Patch(':id/status')

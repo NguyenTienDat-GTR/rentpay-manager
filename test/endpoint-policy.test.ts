@@ -47,6 +47,7 @@ describe('Endpoint rate limit and retry policy', () => {
       [ContractsController, 'list'],
       [ContractsController, 'get'],
       [BillingPeriodsController, 'list'],
+      [BillingPeriodsController, 'get'],
       [ChargesController, 'list'],
       [ChargesController, 'get'],
       [PaymentsController, 'list'],

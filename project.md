@@ -109,8 +109,16 @@ Model chính:
 
 ### 4.4 Kỳ tính tiền và khoản thu
 
-- `BillingPeriod` tạo theo `month/year`, tự set start/end là đầu/cuối tháng nếu không truyền.
-- `POST /api/billing-periods/:id/generate-monthly-rent` tạo charge `ROOM_RENT` cho các contract `ACTIVE` trong kỳ, bỏ qua nếu đã có charge tiền phòng chưa bị cancel.
+- `BillingPeriod` có thêm `createdBy/creator` để lưu người tạo kỳ.
+- `BillingPeriod` tạo theo `month/year`; nếu FE không truyền thì mặc định lấy tháng/năm hiện tại, `startDate` là ngày hiện tại và `endDate` = `startDate + 1 tháng`.
+- Khi tạo kỳ thu chỉ chấp nhận trạng thái `OPEN` hoặc `LOCKED`; mặc định là `OPEN`.
+- `BillingPeriod` chỉ cho sửa `endDate` khi trạng thái hiện tại là `OPEN` hoặc `LOCKED`.
+- Chuyển trạng thái hợp lệ:
+  - `OPEN -> LOCKED/CLOSED`
+  - `LOCKED -> OPEN/CLOSED`
+  - `CLOSED` không được mở lại.
+- Kỳ thu tới hoặc qua `endDate` sẽ tự động chuyển `CLOSED`; backend vừa chạy kiểm tra nền mỗi 60 giây, vừa đồng bộ lại khi đọc/ghi kỳ thu.
+- `POST /api/billing-periods/:id/generate-monthly-rent` chỉ chạy khi kỳ đang `OPEN`; kỳ `LOCKED` hoặc `CLOSED` sẽ bị chặn. Endpoint tạo charge `ROOM_RENT` cho các contract `ACTIVE` trong kỳ, bỏ qua nếu đã có charge tiền phòng chưa bị cancel.
 - Lần đầu tạo tiền phòng có thể trừ số tiền cọc đã thu (`DEPOSIT`) của contract.
 - `Charge` luôn có `paymentCode` dạng `RTP-XXXXXX`, `transferContent` dạng `{prefix} {paymentCode}`. Prefix ví dụ: `THUE`, `COC`, `DIEN`, `NUOC`.
 - `Charge` có nhiều `ChargeItem`; `amountDue` bằng tổng items.
@@ -261,6 +269,12 @@ Tất cả endpoint bên dưới có prefix `/api`.
 - `GET /billing-periods`: list kỳ. Filter `status`, `year`.
 - `POST /billing-periods`
   - Body: `month`, `year`, `startDate?`, `endDate?`, `status?`.
+  - Response include thêm `creator`.
+- `GET /billing-periods/:id`
+  - Detail kỳ thu, include thêm `creator`.
+- `PATCH /billing-periods/:id`
+  - Body: `{ "endDate": "ISO date" }`.
+  - Chỉ cho kỳ `OPEN` hoặc `LOCKED`.
 - `PATCH /billing-periods/:id/status`
   - Body: `{ "status": "OPEN|CLOSED|LOCKED" }`.
 - `POST /billing-periods/:id/generate-monthly-rent`

@@ -7,6 +7,7 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     await this.$connect();
     await this.ensureChargeItemsTable();
     await this.ensureRoomAreasSchema();
+    await this.ensureBillingPeriodCreatorSchema();
     await this.ensureTenantCreditLedgerSchema();
   }
 
@@ -98,6 +99,23 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     await this.$executeRawUnsafe(`ALTER TABLE "Room" ALTER COLUMN "roomAreaId" SET NOT NULL`);
     await this.$executeRawUnsafe(`ALTER TABLE "Room" DROP COLUMN IF EXISTS "name"`);
     await this.$executeRawUnsafe(`ALTER TABLE "Room" DROP COLUMN IF EXISTS "floor"`);
+  }
+
+  private async ensureBillingPeriodCreatorSchema() {
+    await this.$executeRawUnsafe(`ALTER TABLE "BillingPeriod" ADD COLUMN IF NOT EXISTS "createdBy" TEXT`);
+    await this.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "BillingPeriod_createdBy_idx" ON "BillingPeriod"("createdBy")`);
+    await this.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'BillingPeriod_createdBy_fkey') THEN
+          ALTER TABLE "BillingPeriod"
+            ADD CONSTRAINT "BillingPeriod_createdBy_fkey"
+            FOREIGN KEY ("createdBy") REFERENCES "User"("id")
+            ON DELETE SET NULL
+            ON UPDATE CASCADE;
+        END IF;
+      END $$
+    `);
   }
 
   private async ensureTenantCreditLedgerSchema() {
