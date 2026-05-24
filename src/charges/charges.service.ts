@@ -238,12 +238,10 @@ export class ChargesService extends BaseCrudService {
     const items = this.normalizeChargeItems(body.items ?? [{ chargeType: body.chargeType, title: body.title, amount: body.amountDue }]);
     const hasRoomRent = items.some((item) => item.chargeType === ChargeType.ROOM_RENT);
     const contract = await this.resolveContract(businessId, roomId, body.contractId, hasRoomRent);
-    const billingPeriodId = body.billingPeriodId ? String(body.billingPeriodId) : null;
-    if (billingPeriodId) {
-      const period = await this.prisma.billingPeriod.findFirst({ where: { id: billingPeriodId, businessId } });
-      if (!period) throw new BadRequestException('Billing period not found');
-      if (period.status !== BillingPeriodStatus.OPEN) throw new BadRequestException('Billing period must be open');
-    }
+    const billingPeriodId = requiredText(body.billingPeriodId, 'Billing period is required');
+    const period = await this.prisma.billingPeriod.findFirst({ where: { id: billingPeriodId, businessId } });
+    if (!period) throw new BadRequestException('Billing period not found');
+    if (period.status !== BillingPeriodStatus.OPEN) throw new BadRequestException('Billing period must be open');
     if (hasRoomRent && contract && billingPeriodId) await this.assertRoomRentNotDuplicated(businessId, contract.id, billingPeriodId, body.id);
     const bankAccountId = requiredText(body.bankAccountId, 'Bank account is required');
     const bankAccount = await this.prisma.bankAccount.findFirst({
