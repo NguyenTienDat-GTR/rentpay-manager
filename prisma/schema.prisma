@@ -345,6 +345,7 @@ model RentalContract {
   representativeTenantId String
   startDate              DateTime
   endDate                DateTime?
+  reason                 Json?
   rentAmount             Decimal            @db.Decimal(14, 2)
   depositAmount          Decimal            @db.Decimal(14, 2)
   paymentCycle           PaymentCycle       @default(MONTHLY)

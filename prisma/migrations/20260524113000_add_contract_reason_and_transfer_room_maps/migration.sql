@@ -1,0 +1,2 @@
+ALTER TABLE "RentalContract"
+ADD COLUMN IF NOT EXISTS "reason" JSONB;

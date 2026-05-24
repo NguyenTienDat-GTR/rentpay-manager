@@ -35,18 +35,18 @@ export class ContractsController {
   }
 
   @Patch(':id/terminate')
-  terminate(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.contracts.terminate(user, id);
+  terminate(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: any) {
+    return this.contracts.terminate(user, id, body);
   }
 
   @Patch(':id/expire')
-  expire(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.contracts.expire(user, id);
+  expire(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: any) {
+    return this.contracts.expire(user, id, body);
   }
 
   @Patch(':id/cancel')
-  cancel(@CurrentUser() user: AuthUser, @Param('id') id: string) {
-    return this.contracts.cancel(user, id);
+  cancel(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: any) {
+    return this.contracts.cancel(user, id, body);
   }
 
   @Post(':id/transfer-room')
