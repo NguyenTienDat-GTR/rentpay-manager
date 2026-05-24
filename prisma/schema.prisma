@@ -173,6 +173,7 @@ model User {
   business          Business?         @relation(fields: [businessId], references: [id])
   sessions          AuthSession[]
   auditLogs         AuditLog[]        @relation("AuditUser")
+  billingPeriodsCreated BillingPeriod[] @relation("BillingPeriodCreator")
   collectedPayments Payment[]         @relation("PaymentCollector")
   notificationLogs  NotificationLog[] @relation("NotificationCreator")
   tenantCreditActivities TenantCreditActivity[] @relation("TenantCreditActivityCreator")
@@ -409,6 +410,7 @@ model ContractOccupant {
 model BillingPeriod {
   id        String              @id @default(cuid())
   businessId String
+  createdBy String?
   month     Int
   year      Int
   startDate DateTime
@@ -417,10 +419,12 @@ model BillingPeriod {
   createdAt DateTime            @default(now())
   updatedAt DateTime            @updatedAt
   business  Business            @relation(fields: [businessId], references: [id])
+  creator   User?               @relation("BillingPeriodCreator", fields: [createdBy], references: [id])
   charges   Charge[]
 
   @@unique([businessId, month, year])
   @@index([businessId, status])
+  @@index([createdBy])
 }
 
 model Charge {
