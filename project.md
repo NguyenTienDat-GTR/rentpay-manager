@@ -123,6 +123,7 @@ Model chính:
 - `Charge` luôn có `paymentCode` dạng `RTP-XXXXXX`, `transferContent` dạng `{prefix} {paymentCode}`. Prefix ví dụ: `THUE`, `COC`, `DIEN`, `NUOC`.
 - `Charge` có nhiều `ChargeItem`; `amountDue` bằng tổng items.
 - Charge tiền phòng bắt buộc liên kết effective active contract và không được trùng theo `(contractId, billingPeriodId)` khi chưa cancel.
+- Tạo/update charge hiện bắt buộc có `billingPeriodId`; nếu thiếu sẽ trả lỗi `Billing period is required` để FE hiển thị đúng thay vì báo thành công giả.
 - Tạo/update charge yêu cầu bank account active có ít nhất một `BankConnection` status `CONNECTED`.
 - QR trả payload JSON gồm bankCode, accountNumber, accountName, amount còn lại, transferContent, paymentCode.
 
@@ -287,7 +288,7 @@ Tất cả endpoint bên dưới có prefix `/api`.
 - `GET /charges/:id`: chi tiết charge include payments/items/sourceCreditLedgers/targetCreditLedgers và field tính toán credit.
 - `GET /charges/:id/qr`: rate-limit 60/phút/business-or-IP.
 - `POST /charges`
-  - Body chính: `roomId`, `contractId?`, `payerTenantId?`, `billingPeriodId?`, `bankAccountId`, `title?`, `dueDate?`, `paymentLink?`, `items`.
+  - Body chính: `roomId`, `contractId?`, `payerTenantId?`, `billingPeriodId`, `bankAccountId`, `title?`, `dueDate?`, `paymentLink?`, `items`.
   - `items`: `[{ "chargeType": "ELECTRICITY", "title": "Tiền điện", "amount": 100000, "note": "..." }]`.
 - `PATCH /charges/:id`: chỉ update khi status `UNPAID` hoặc `PARTIAL`; không cho đổi `paymentCode/transferContent`.
 - `PATCH /charges/:id/cancel`: chỉ khi chưa settled (`PAID/OVERPAID`).
