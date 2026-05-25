@@ -384,6 +384,9 @@ export class ChargesService extends BaseCrudService {
 
   async cancel(user: AuthUser, id: string) {
     const current = await this.get('charge', user, id);
+    if (current.status === ChargeStatus.CANCELLED) {
+      throw new BadRequestException('Cancelled charges cannot be cancelled again');
+    }
     if (isSettledStatus(current.status)) {
       throw new BadRequestException('Paid charges cannot be cancelled');
     }

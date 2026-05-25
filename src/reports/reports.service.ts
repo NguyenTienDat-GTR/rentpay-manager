@@ -47,7 +47,7 @@ export class ReportsService {
 
   bankTransactions(user: AuthUser) {
     if (!user.businessId) throw new BadRequestException('Report requires business user');
-    return this.prisma.bankTransaction.findMany({ where: { businessId: user.businessId }, orderBy: { transactionTime: 'desc' } });
+    return this.prisma.bankTransaction.findMany({ where: { businessId: user.businessId }, include: { matches: true }, orderBy: { transactionTime: 'desc' } });
   }
 
   async exportExcel(user: AuthUser) {

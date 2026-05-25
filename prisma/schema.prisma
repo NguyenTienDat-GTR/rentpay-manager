@@ -146,7 +146,9 @@ enum TransactionClassification {
 
 enum PaymentMatchStatus {
   AUTO_MATCHED
+  MANUAL_MATCHED
   NEEDS_REVIEW
+  REJECTED
   IGNORED
 }
 
@@ -175,6 +177,7 @@ model User {
   auditLogs         AuditLog[]        @relation("AuditUser")
   billingPeriodsCreated BillingPeriod[] @relation("BillingPeriodCreator")
   collectedPayments Payment[]         @relation("PaymentCollector")
+  reviewedPaymentMatches PaymentMatch[] @relation("PaymentMatchReviewer")
   notificationLogs  NotificationLog[] @relation("NotificationCreator")
   tenantCreditActivities TenantCreditActivity[] @relation("TenantCreditActivityCreator")
 
@@ -550,12 +553,18 @@ model PaymentMatch {
   matchStatus PaymentMatchStatus
   confidence  Int
   reason      Json
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  reviewNote  String?
+  reviewDecision Json?
   createdAt   DateTime           @default(now())
   business    Business           @relation(fields: [businessId], references: [id])
   transaction BankTransaction    @relation(fields: [transactionId], references: [id])
   charge      Charge?            @relation(fields: [chargeId], references: [id])
+  reviewer    User?              @relation("PaymentMatchReviewer", fields: [reviewedBy], references: [id])
 
   @@index([businessId, matchStatus])
+  @@index([reviewedBy])
 }
 
 model CreditLedger {

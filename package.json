@@ -5,8 +5,8 @@
   "description": "RentPay Manager backend - NestJS, Prisma, PostgreSQL, Redis",
   "scripts": {
     "build": "nest build",
-    "start": "node dist/main.js",
-    "start:prod": "prisma migrate deploy && node dist/main.js",
+    "start": "prisma migrate deploy && node dist/main.js",
+    "start:prod": "npm run start",
     "start:dev": "nest start --watch",
     "test": "tsx --test \"test/**/*.test.ts\"",
     "test:watch": "tsx --test --watch \"test/**/*.test.ts\"",
