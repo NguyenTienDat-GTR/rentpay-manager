@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, Query, Req } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, Query, Req } from '@nestjs/common';
 import { Request } from 'express';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
 import { Public } from '../common/decorators/public.decorator';
@@ -20,6 +20,22 @@ export class BankTransactionsController {
   @Retryable()
   matches(@CurrentUser() user: AuthUser, @Query() query: any) {
     return this.transactions.listMatches(user, query);
+  }
+
+  @Get('payment-matches/:id/review-context')
+  @Retryable()
+  reviewContext(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.transactions.reviewContext(user, id);
+  }
+
+  @Post('payment-matches/:id/confirm')
+  confirmMatch(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: any) {
+    return this.transactions.confirmMatch(user, id, body);
+  }
+
+  @Post('payment-matches/:id/reject')
+  rejectMatch(@CurrentUser() user: AuthUser, @Param('id') id: string, @Body() body: any) {
+    return this.transactions.rejectMatch(user, id, body);
   }
 
   @Post('webhook-demo')

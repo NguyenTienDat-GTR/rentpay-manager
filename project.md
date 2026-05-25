@@ -482,3 +482,41 @@ API mặc định chạy tại `http://localhost:5000/api`. Docker compose kèm 
 - `GET /charges` include thêm `payments` chưa bị hủy, sắp xếp `paidAt` giảm dần, để FE có thể hiển thị thời gian thanh toán trong chi tiết khoản thu mà không cần gọi thêm endpoint.
 - `GET /bank-transactions` include thêm `payments` kèm `room/roomArea` và `charge`, ngoài `matches`, để FE hiển thị được phòng và thời gian thanh toán trong chi tiết giao dịch ngân hàng.
 - Các trường ngày tạo (`createdAt`) vẫn là field sẵn có trong Prisma model; FE chỉ đưa vào màn chi tiết thay vì cột danh sách.
+
+## 11. Luồng rà soát thủ công giao dịch ngân hàng không có mã khoản thu
+
+- `PaymentMatchStatus` hiện gồm `AUTO_MATCHED`, `MANUAL_MATCHED`, `NEEDS_REVIEW`, `REJECTED`, `IGNORED`.
+- `PaymentMatch` lưu thêm audit review: `reviewedBy`, `reviewedAt`, `reviewNote`, `reviewDecision`; quan hệ reviewer trỏ về `User`.
+- Giao dịch ngân hàng tiền vào (`IN`) có `amount > 0` nhưng nội dung không có mã khoản thu hợp lệ `RTP-XXXXXX` không được tự tạo `Payment`. Backend luôn phân loại giao dịch là `SUSPICIOUS` và tạo `PaymentMatch.NEEDS_REVIEW`, để người dùng kiểm tra thủ công.
+- Migration `20260525103000_review_inbound_without_payment_code` backfill các giao dịch cũ đang bị `OTHER/IGNORED` nhưng là tiền vào không có mã khoản thu về `SUSPICIOUS/NEEDS_REVIEW`.
+- Giao dịch có mã khoản thu hợp lệ và charge thuộc cùng business mới được auto-match: `RENT_MATCHED/AUTO_MATCHED`, confidence 100 và tự tạo `Payment.BANK_TRANSFER`.
+- Giao dịch có mã khoản thu không tồn tại, mã thuộc charge đã hủy, hoặc charge không đủ điều kiện sẽ vào `NEEDS_REVIEW` thay vì tạo payment.
+
+API review:
+
+- `GET /payment-matches/:id/review-context`
+  - Trả `match`, `transaction` và `suggestions`.
+  - `suggestions` chỉ lấy charge cùng `businessId`, cùng `bankAccountId`, trạng thái `UNPAID/PARTIAL`.
+  - Scoring gợi ý dựa trên: mã khoản thu, nội dung chuyển khoản, loại khoản thu, kỳ thu, số tiền còn thiếu, số tiền phải thu, mã phòng, khu/tầng, SĐT/tên người thuê và trạng thái khoản thu còn mở.
+  - Text matching bỏ dấu tiếng Việt và so dạng compact, nên nội dung như `tien rac b101 7/2026` có thể gợi ý charge rác phòng `B-101`, kỳ 7/2026.
+- `POST /payment-matches/:id/confirm`
+  - Chỉ cho match `NEEDS_REVIEW`.
+  - Yêu cầu `chargeId`; dùng giao dịch ngân hàng gốc để tạo `Payment`.
+  - Điều kiện bắt buộc: giao dịch `IN`, amount > 0, chưa có confirmed payment, bank account cùng business, charge cùng business, charge không `CANCELLED/PAID/OVERPAID`, charge có `paymentCode`, phòng, kỳ thu và tenant/contract đủ truy vết.
+  - `paidAt` luôn lấy từ `BankTransaction.transactionTime`; không sửa `rawData`.
+  - Nếu số tiền lớn hơn phần còn thiếu, bắt buộc `reviewNote`; phần dư xử lý theo logic `OVERPAID/credit` hiện có qua `TenantCreditsService.recalculateCharge`.
+  - Tạo `Payment.BANK_TRANSFER`, cập nhật match `MANUAL_MATCHED`, lưu reviewer/time/note/decision, cập nhật transaction `RENT_MATCHED`, ghi audit `MANUAL_CONFIRM_PAYMENT_MATCH`.
+- `POST /payment-matches/:id/reject`
+  - Chỉ cho match `NEEDS_REVIEW`.
+  - Không tạo payment, cập nhật match `REJECTED`, transaction `OTHER`, lưu reviewer/time/note/decision, ghi audit `REJECT_PAYMENT_MATCH`.
+  - Nếu không có charge hợp lệ nào được gợi ý thì bắt buộc nhập `reviewNote` khi bỏ qua.
+
+Quy tắc liên quan khoản thu:
+
+- Khoản thu `CANCELLED` hoặc `PAID` là read-only về nghiệp vụ list/detail: backend chặn sửa, QR, ghi nhận tiền mặt và hủy lại.
+- Khoản thu `PAID/OVERPAID/CANCELLED` không được nhận thêm payment tự động hoặc xác nhận thủ công.
+
+Dashboard/báo cáo:
+
+- `GET /dashboard/summary` trả thêm `needsReviewTransactions` và `ignoredMatches`, ngoài `suspiciousTransactions` và `otherTransactions`.
+- `GET /reports/bank-transactions` include `matches` để FE thống kê `NEEDS_REVIEW` và `IGNORED`.

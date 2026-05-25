@@ -55,6 +55,7 @@ describe('Endpoint rate limit and retry policy', () => {
       [BankConnectionsController, 'list'],
       [BankTransactionsController, 'list'],
       [BankTransactionsController, 'matches'],
+      [BankTransactionsController, 'reviewContext'],
       [DashboardController, 'summary'],
       [ReportsController, 'summary'],
       [ReportsController, 'debt'],
@@ -77,6 +78,8 @@ describe('Endpoint rate limit and retry policy', () => {
       [ContractsController, 'activate'],
       [BillingPeriodsController, 'generate'],
       [PaymentsController, 'cash'],
+      [BankTransactionsController, 'confirmMatch'],
+      [BankTransactionsController, 'rejectMatch'],
       [BankTransactionsController, 'publicWebhook'],
     ].forEach(([controller, method]) => assert.equal(Reflect.getMetadata(RETRYABLE_KEY, (controller as any).prototype[method as string]), undefined));
   });
