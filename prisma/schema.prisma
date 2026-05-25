@@ -320,7 +320,7 @@ model Tenant {
   fullName              String
   phone                 String
   identityNumber        String
-  dateOfBirth           DateTime?
+  dateOfBirth           DateTime?          @db.Date
   permanentAddress      String
   note                  String?
   status                TenantStatus       @default(DEPOSITED)
@@ -343,8 +343,8 @@ model RentalContract {
   businessId             String
   roomId                 String
   representativeTenantId String
-  startDate              DateTime
-  endDate                DateTime?
+  startDate              DateTime           @db.Date
+  endDate                DateTime?          @db.Date
   reason                 Json?
   rentAmount             Decimal            @db.Decimal(14, 2)
   depositAmount          Decimal            @db.Decimal(14, 2)
@@ -391,12 +391,12 @@ model ContractOccupant {
   fullName     String
   phone        String?
   identityNumber String?
-  dateOfBirth  DateTime?
+  dateOfBirth  DateTime?      @db.Date
   permanentAddress String?
   occupantType OccupantType
   relationship String?
-  moveInDate   DateTime
-  moveOutDate  DateTime?
+  moveInDate   DateTime       @db.Date
+  moveOutDate  DateTime?      @db.Date
   status       OccupantStatus @default(DEPOSITED)
   createdAt    DateTime       @default(now())
   updatedAt    DateTime       @updatedAt

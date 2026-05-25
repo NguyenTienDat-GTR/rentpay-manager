@@ -104,8 +104,14 @@ Model chính:
 - Nếu contract `ACTIVE` và `startDate` đã tới ngày hiệu lực: phòng thành `OCCUPIED`, tenant/occupants thành `STAYING`, tính `currentOccupantCount`.
 - Nếu `PENDING` hoặc `ACTIVE` nhưng `startDate` trong tương lai: phòng thành `DEPOSITED`, occupant count = 0, tenant/occupants `DEPOSITED`.
 - List/get contract và tenant có sync trạng thái theo ngày hiện tại trước khi trả dữ liệu.
-- Đóng hợp đồng (`terminate/expire/cancel`) set room còn trống thành `AVAILABLE`, occupants `LEFT`, representative tenant `LEFT` nếu không còn contract active khác.
-- Transfer room chỉ áp dụng với contract `ACTIVE`, tạo contract mới ở phòng mới, terminate contract cũ, chuyển selected occupants, có audit metadata.
+- `RentalContract.reason` lưu lý do hết hiệu lực dạng JSON. Các lý do đang dùng gồm người thuê tự rời đi, đổi phòng, vi phạm nội quy, hai bên thỏa thuận, hết hạn kỳ thuê và `OTHER` có mô tả tự do.
+- Đóng hợp đồng (`terminate/expire/cancel`) nhận body lý do (`reasonCode`, `reasonDetail`, `reason`) rồi set room còn trống thành `AVAILABLE`, occupants `LEFT`, representative tenant `LEFT` nếu không còn contract active khác. Riêng `OTHER` bắt buộc có chi tiết.
+- Transfer room chỉ áp dụng với contract `ACTIVE`. Trước khi chuyển, backend chặn nếu còn khoản thu `UNPAID` hoặc `PARTIAL` liên quan theo một trong ba trục: `contractId` của hợp đồng hiện tại, `roomId` thuộc các phòng trong hợp đồng, hoặc `payerTenantId` là người thuê đại diện.
+- Transfer room hỗ trợ đổi một hoặc nhiều phòng trong hợp đồng. Payload dùng `roomTransfers`/`transfers` dạng `{ oldRoomId, newRoomId }`; không được chọn quá số phòng đang thuê, không trùng phòng cũ/phòng mới, phòng mới phải khác phòng cũ.
+- Khi chuyển phòng, toàn bộ occupants của phòng cũ được chọn phải đi cùng; backend không còn cho chọn subset occupants. Sức chứa được kiểm tra theo từng phòng mới, tính cả người đại diện nếu người đại diện nằm trong phòng được chuyển.
+- Transfer room tạo contract mới dựa trên thông tin chuyển phòng, giữ người đại diện hiện tại, tạo lại occupants sang phòng mới và tạo charge tiền cọc nếu có. `endDate` của contract mới mặc định lấy từ contract cũ nhưng có thể override qua body; `endDate` phải bằng hoặc sau `transferDate`.
+- `transferDate` là ngày bắt đầu contract mới và bắt buộc là hôm nay hoặc sau hôm nay. Nếu `transferDate` là hôm nay, contract cũ được xử lý hết hiệu lực/cắt phòng ngay trong transaction. Nếu `transferDate` ở tương lai, contract cũ vẫn hiệu lực tới ngày đó; backend lưu lịch chuyển trong `RentalContract.reason.transfer`, tạo contract mới ở trạng thái `ACTIVE` nhưng occupants/phòng mới ở trạng thái đặt cọc, rồi `syncEffectiveActiveContracts` xử lý cắt contract cũ khi ngày bắt đầu tới.
+- Khi contract cũ hết hiệu lực do chuyển phòng, `reason.code = ROOM_CHANGE`; chi tiết transfer lưu metadata `oldContractId`, `newContractId` và `roomTransfers`.
 
 ### 4.4 Kỳ tính tiền và khoản thu
 
@@ -225,7 +231,7 @@ Tất cả endpoint bên dưới có prefix `/api`.
 - `PATCH /tenants/:id`: update thông tin tenant.
 - `PATCH /tenants/:id/left`: set tenant `LEFT`.
 - `GET /contracts`: list hợp đồng. Filter `status`, `roomId`, `representativeTenantId`.
-- `GET /contracts/:id`: chi tiết include room/roomArea/contractRooms/representativeTenant/occupants.
+- `GET /contracts/:id`: chi tiết include room/roomArea/contractRooms/representativeTenant/occupants và `charges` liên quan theo `contractId`, các `roomId` trong hợp đồng hoặc `payerTenantId` của người đại diện để FE kiểm tra công nợ trước khi chuyển phòng.
 - `POST /contracts`
   - Body chính:
 
@@ -260,10 +266,14 @@ Tất cả endpoint bên dưới có prefix `/api`.
 
 - `PATCH /contracts/:id`: bị chặn, không edit trực tiếp contract.
 - `PATCH /contracts/:id/activate`: chuyển contract sang active.
-- `PATCH /contracts/:id/terminate`, `/expire`, `/cancel`: đóng contract.
+- `PATCH /contracts/:id/terminate`, `/expire`, `/cancel`: đóng contract. Body có thể gửi `note`, `endDate`, `reasonCode`, `reasonDetail`, `reason`; `terminate` yêu cầu lý do, `expire` mặc định `LEASE_TERM_ENDED`, `OTHER` yêu cầu chi tiết.
 - `POST /contracts/:id/transfer-room`
-  - Body: `newRoomId`, `transferDate?`, `representativeTenantId?`, `occupantIds?`, `rentAmount?`, `depositAmount?`, `paymentCycle?`, `paymentDueDay?`, `note?`.
-  - Response: `{ success, message, data: { oldContract, newContract, oldRoom, newRoom } }`.
+  - Body chính: `transferDate`, `endDate?`, `roomTransfers`/`transfers: [{ oldRoomId, newRoomId }]`, `representativeTenantId?`, `rentAmount?`, `depositAmount?`, `paymentCycle?`, `paymentDueDay?`, `note?`.
+  - Tương thích case 1 phòng cũ vẫn nhận `oldRoomId/newRoomId`, nhưng logic chuẩn là `roomTransfers`.
+  - Chặn chuyển nếu hợp đồng còn khoản thu `UNPAID/PARTIAL` theo `contractId`, phòng trong hợp đồng hoặc người đại diện (`payerTenantId`).
+  - `transferDate` phải là hôm nay hoặc sau hôm nay; `endDate` mặc định từ contract cũ và phải bằng hoặc sau `transferDate`.
+  - Nếu `transferDate` ở tương lai, contract cũ chỉ hết hiệu lực khi tới ngày bắt đầu contract mới trong bước sync trạng thái theo ngày.
+  - Response: `{ success, message, data: { oldContract, newContract, oldRooms, newRooms } }`.
 
 ### 5.5 Billing periods, charges, payments
 

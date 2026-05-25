@@ -49,7 +49,7 @@ export class ContractsService extends BaseCrudService {
     const status = this.normalizeContractStatus(body.status ?? ContractStatus.ACTIVE);
     const startDate = this.normalizeDate(body.startDate, 'Start date is required');
     this.assertContractDateRange(startDate, body.endDate);
-    const endDate = body.endDate ? new Date(body.endDate) : null;
+    const endDate = this.normalizeOptionalDate(body.endDate, 'Invalid end date');
     const roomIds = this.normalizeRoomIds(body.roomIds ?? body.roomId);
     const rooms = await this.getRoomsForActiveContract(businessId, roomIds, status);
     const representativeData = this.normalizeRepresentative(body.tenant ?? body.representativeTenant ?? body);
@@ -124,21 +124,20 @@ export class ContractsService extends BaseCrudService {
   }
 
   terminate(user: AuthUser, id: string, body: any = {}) {
-    return this.closeContract(user, id, ContractStatus.TERMINATED, new Date(), 'TERMINATE_CONTRACT', body, { requireReason: true });
+    return this.closeContract(user, id, ContractStatus.TERMINATED, startOfLocalDay(new Date()), 'TERMINATE_CONTRACT', body, { requireReason: true });
   }
 
   expire(user: AuthUser, id: string, body: any = {}) {
-    return this.closeContract(user, id, ContractStatus.EXPIRED, new Date(), 'EXPIRE_CONTRACT', body, { defaultReasonCode: 'LEASE_TERM_ENDED' });
+    return this.closeContract(user, id, ContractStatus.EXPIRED, startOfLocalDay(new Date()), 'EXPIRE_CONTRACT', body, { defaultReasonCode: 'LEASE_TERM_ENDED' });
   }
 
   cancel(user: AuthUser, id: string, body: any = {}) {
-    return this.closeContract(user, id, ContractStatus.CANCELLED, new Date(), 'CANCEL_CONTRACT', body);
+    return this.closeContract(user, id, ContractStatus.CANCELLED, startOfLocalDay(new Date()), 'CANCEL_CONTRACT', body);
   }
 
   async transferRoom(user: AuthUser, id: string, body: any) {
     const businessId = requireBusinessId(user);
-    const transferDate = body.transferDate ? new Date(body.transferDate) : new Date();
-    if (Number.isNaN(transferDate.getTime())) throw new BadRequestException('Invalid transferDate');
+    const transferDate = body.transferDate ? this.normalizeDate(body.transferDate, 'Invalid transferDate') : startOfLocalDay(new Date());
     this.assertDateIsTodayOrLater(transferDate, 'Transfer date must be today or later');
 
     const oldContract = await this.prisma.rentalContract.findFirst({
@@ -505,12 +504,12 @@ export class ContractsService extends BaseCrudService {
         fullName,
         phone,
         identityNumber: this.optionalIdentityNumber(occupant.identityNumber),
-        dateOfBirth: occupant.dateOfBirth ? new Date(occupant.dateOfBirth) : null,
+        dateOfBirth: this.normalizeOptionalDate(occupant.dateOfBirth, 'Invalid date of birth'),
         permanentAddress: this.optionalText(occupant.permanentAddress) ?? null,
         occupantType,
         relationship: this.optionalText(occupant.relationship) ?? null,
         roomId: this.optionalText(occupant.roomId) ?? null,
-        moveInDate: occupant.moveInDate ? new Date(occupant.moveInDate) : defaultMoveInDate,
+        moveInDate: occupant.moveInDate ? this.normalizeDate(occupant.moveInDate, 'Invalid move in date') : defaultMoveInDate,
       };
     });
     if (normalized.some((occupant) => occupant.occupantType === OccupantType.ADULT) && !normalized.some((occupant) => occupant.phone)) {
@@ -609,7 +608,7 @@ export class ContractsService extends BaseCrudService {
       phone: this.requiredPhone(input.phone, 'Tenant phone is required', 'Invalid tenant phone'),
       identityNumber: this.requiredIdentityNumber(input.identityNumber),
       permanentAddress: this.requiredText(input.permanentAddress, 'Tenant permanent address is required'),
-      dateOfBirth: input.dateOfBirth ? new Date(input.dateOfBirth) : null,
+      dateOfBirth: this.normalizeOptionalDate(input.dateOfBirth, 'Invalid date of birth'),
       note: this.optionalText(input.note) ?? null,
     };
   }
@@ -722,14 +721,21 @@ export class ContractsService extends BaseCrudService {
 
   private normalizeDate(value: unknown, message: string) {
     if (!value) throw new BadRequestException(message);
-    const date = new Date(String(value));
+    const date = parseLocalDateOnly(value);
     if (Number.isNaN(date.getTime())) throw new BadRequestException('Invalid date');
+    return date;
+  }
+
+  private normalizeOptionalDate(value: unknown, invalidMessage: string) {
+    if (!value) return null;
+    const date = parseLocalDateOnly(value);
+    if (Number.isNaN(date.getTime())) throw new BadRequestException(invalidMessage);
     return date;
   }
 
   private normalizeTransferEndDate(value: unknown, startDate: Date) {
     if (!value) return null;
-    const endDate = new Date(String(value));
+    const endDate = parseLocalDateOnly(value);
     if (Number.isNaN(endDate.getTime())) throw new BadRequestException('Invalid end date');
     if (startOfLocalDay(endDate).getTime() < startOfLocalDay(startDate).getTime()) {
       throw new BadRequestException('End date must be on or after start date');
@@ -748,7 +754,7 @@ export class ContractsService extends BaseCrudService {
       throw new BadRequestException('Start date must be today or later');
     }
     if (!endDateValue) return;
-    const endDate = new Date(String(endDateValue));
+    const endDate = parseLocalDateOnly(endDateValue);
     if (Number.isNaN(endDate.getTime())) throw new BadRequestException('Invalid end date');
     const minimumEndDate = addMonths(startOfLocalDay(startDate), 1);
     if (startOfLocalDay(endDate).getTime() < minimumEndDate.getTime()) {
@@ -919,6 +925,15 @@ function isRoomReservedContractStatus(status: ContractStatus) {
 
 function startOfLocalDay(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function parseLocalDateOnly(value: unknown) {
+  if (value instanceof Date) return startOfLocalDay(value);
+  const text = String(value ?? '').trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+  if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? date : startOfLocalDay(date);
 }
 
 function addMonths(date: Date, months: number) {
