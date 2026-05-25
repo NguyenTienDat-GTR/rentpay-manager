@@ -1,5 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
-import { BankConnectionStatus, BillingPeriodStatus, ChargeStatus, ChargeType, ContractStatus, NotificationAction, OccupantStatus } from '@prisma/client';
+import { BankConnectionStatus, BillingPeriodStatus, ChargeStatus, ChargeType, ContractStatus, NotificationAction, OccupantStatus, PaymentStatus } from '@prisma/client';
 import QRCode from 'qrcode';
 import { AuditService } from '../audit/audit.service';
 import { BaseCrudService } from '../common/base-crud.service';
@@ -65,7 +65,17 @@ export class ChargesService extends BaseCrudService {
     }
 
     const where = scopedWhere(user, and.length ? { AND: and } : {});
-    const include = { room: { include: { roomArea: true } }, payerTenant: true, billingPeriod: true, bankAccount: true, items: true };
+    const include = {
+      room: { include: { roomArea: true } },
+      payerTenant: true,
+      billingPeriod: true,
+      bankAccount: true,
+      items: true,
+      payments: {
+        where: { status: { not: PaymentStatus.CANCELLED } },
+        orderBy: { paidAt: 'desc' as const },
+      },
+    };
     const [items, total] = await Promise.all([
       this.prisma.charge.findMany({
         where,

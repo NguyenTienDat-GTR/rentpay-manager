@@ -476,3 +476,9 @@ API mặc định chạy tại `http://localhost:5000/api`. Docker compose kèm 
 - Khi đổi env/script/Docker: cập nhật mục cách chạy/build/test.
 - Khi thêm realtime event hoặc cache key mới: cập nhật kiến trúc và flow liên quan.
 - Khi thêm/sửa enum hoặc message lỗi/exception trả về API: cần đồng bộ mapping tiếng Việt phía FE trong `FE/src/shared/utils/labels.ts` và `FE/src/shared/utils/messages.ts`.
+
+## 10. Cập nhật dữ liệu phục vụ chi tiết khoản thu/giao dịch
+
+- `GET /charges` include thêm `payments` chưa bị hủy, sắp xếp `paidAt` giảm dần, để FE có thể hiển thị thời gian thanh toán trong chi tiết khoản thu mà không cần gọi thêm endpoint.
+- `GET /bank-transactions` include thêm `payments` kèm `room/roomArea` và `charge`, ngoài `matches`, để FE hiển thị được phòng và thời gian thanh toán trong chi tiết giao dịch ngân hàng.
+- Các trường ngày tạo (`createdAt`) vẫn là field sẵn có trong Prisma model; FE chỉ đưa vào màn chi tiết thay vì cột danh sách.

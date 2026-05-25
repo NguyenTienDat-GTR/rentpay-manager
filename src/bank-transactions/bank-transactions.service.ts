@@ -30,7 +30,11 @@ export class BankTransactionsService extends BaseCrudService {
       searchFields: ['transactionRef', 'description', 'accountNumber'],
       filterFields: ['classification', 'type', 'bankAccountId'],
       sortFields: ['amount', 'transactionTime', 'classification', 'createdAt'],
-      include: { bankAccount: true, matches: { include: { charge: { include: { room: { include: { roomArea: true } } } } } } },
+      include: {
+        bankAccount: true,
+        payments: { include: { room: { include: { roomArea: true } }, charge: true } },
+        matches: { include: { charge: { include: { room: { include: { roomArea: true } } } } } },
+      },
     });
   }
 
