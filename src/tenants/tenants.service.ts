@@ -156,7 +156,7 @@ export class TenantsService extends BaseCrudService {
   private normalizeDateOfBirth(value: unknown) {
     const text = this.optionalText(value);
     if (!text) return null;
-    const date = /^\d{4}-\d{2}-\d{2}$/.test(text) ? new Date(`${text}T00:00:00.000Z`) : new Date(text);
+    const date = parseLocalDateOnly(text);
     if (Number.isNaN(date.getTime())) throw new BadRequestException('Invalid date of birth');
     if (!isAtLeastAgeByYear(date, 18)) throw new BadRequestException('Tenant must be at least 18 years old');
     return date;
@@ -314,6 +314,15 @@ function isAtLeastAgeByYear(date: Date, age: number) {
 
 function startOfLocalDay(date: Date) {
   return new Date(date.getFullYear(), date.getMonth(), date.getDate());
+}
+
+function parseLocalDateOnly(value: unknown) {
+  if (value instanceof Date) return startOfLocalDay(value);
+  const text = String(value ?? '').trim();
+  const match = /^(\d{4})-(\d{2})-(\d{2})/.exec(text);
+  if (match) return new Date(Number(match[1]), Number(match[2]) - 1, Number(match[3]));
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? date : startOfLocalDay(date);
 }
 
 function addDays(date: Date, days: number) {
