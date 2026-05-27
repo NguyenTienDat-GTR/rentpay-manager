@@ -634,12 +634,23 @@ function roundMoney(value: number) {
 
 function billingPeriodCoveredByDeposit(startDateValue: Date, depositMonths: number, period: any) {
   const startDate = new Date(startDateValue);
+  if (Number.isNaN(startDate.getTime())) return false;
+  const periodStart = period?.startDate ? new Date(period.startDate) : null;
+  const periodEnd = period?.endDate ? new Date(period.endDate) : null;
+  if (periodStart && periodEnd && !Number.isNaN(periodStart.getTime()) && !Number.isNaN(periodEnd.getTime())) {
+    const selectedIndex = periodStart.getFullYear() * 12 + periodStart.getMonth();
+    const firstCoveredIndex =
+      periodStart.getTime() <= startDate.getTime() && startDate.getTime() <= periodEnd.getTime()
+        ? selectedIndex
+        : startDate.getFullYear() * 12 + startDate.getMonth();
+    return selectedIndex >= firstCoveredIndex && selectedIndex < firstCoveredIndex + depositMonths;
+  }
   const month = Number(period?.month);
   const year = Number(period?.year);
-  if (Number.isNaN(startDate.getTime()) || !Number.isInteger(month) || !Number.isInteger(year)) return false;
+  if (!Number.isInteger(month) || !Number.isInteger(year)) return false;
   const startMonthIndex = startDate.getFullYear() * 12 + startDate.getMonth();
   const periodMonthIndex = year * 12 + (month - 1);
-  return periodMonthIndex >= startMonthIndex + 1 && periodMonthIndex <= startMonthIndex + depositMonths;
+  return periodMonthIndex >= startMonthIndex && periodMonthIndex < startMonthIndex + depositMonths;
 }
 
 function startOfLocalDay(value: Date) {
