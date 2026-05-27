@@ -34,7 +34,7 @@ function makeService(status: ChargeStatus) {
       },
     },
   } as any;
-  const service = new ChargesService(prisma, {} as any, {} as any, {} as any);
+  const service = new ChargesService(prisma, {} as any, {} as any, {} as any, {} as any);
   return { service, calls };
 }
 

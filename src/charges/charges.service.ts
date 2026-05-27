@@ -2,6 +2,7 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { BankConnectionStatus, BillingPeriodStatus, ChargeStatus, ChargeType, ContractStatus, NotificationAction, OccupantStatus, PaymentStatus } from '@prisma/client';
 import QRCode from 'qrcode';
 import { AuditService } from '../audit/audit.service';
+import { BillingPeriodsService } from '../billing-periods/billing-periods.service';
 import { BaseCrudService } from '../common/base-crud.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { requireBusinessId, scopedWhere } from '../common/utils/business-scope';
@@ -18,6 +19,7 @@ export class ChargesService extends BaseCrudService {
     private readonly audit: AuditService,
     private readonly redis: RedisService,
     private readonly tenantCredits: TenantCreditsService,
+    private readonly billingPeriods: BillingPeriodsService,
   ) {
     super(prisma);
   }
@@ -28,6 +30,7 @@ export class ChargesService extends BaseCrudService {
     const billingPeriodWhere: Record<string, number> = {};
     const billingMonth = normalizeNumberFilter(query.billingMonth);
     const billingYear = normalizeNumberFilter(query.billingYear);
+    const chargeScope = normalizeChargeScope(query.chargeScope);
 
     if (query.search) {
       const search = contains(query.search);
@@ -49,9 +52,14 @@ export class ChargesService extends BaseCrudService {
     if (query.status) and.push({ status: query.status });
     if (query.billingPeriodId) and.push({ billingPeriodId: query.billingPeriodId });
     if (query.roomId) and.push({ roomId: query.roomId });
+    if (chargeScope === 'DEPOSIT') and.push({ chargeType: ChargeType.DEPOSIT });
+    if (chargeScope === 'PERIOD') and.push({ billingPeriodId: { not: null } });
     if (billingMonth) billingPeriodWhere.month = billingMonth;
     if (billingYear) billingPeriodWhere.year = billingYear;
-    if (Object.keys(billingPeriodWhere).length) and.push({ billingPeriod: { is: billingPeriodWhere } });
+    if (Object.keys(billingPeriodWhere).length && chargeScope !== 'DEPOSIT') {
+      const periodFilter = { billingPeriod: { is: billingPeriodWhere } };
+      and.push(chargeScope === 'PERIOD' ? periodFilter : { OR: [periodFilter, { chargeType: ChargeType.DEPOSIT }] });
+    }
     if (query.isOverdue === 'true') {
       and.push({ dueDate: { lt: new Date() }, status: { in: [ChargeStatus.UNPAID, ChargeStatus.PARTIAL] } });
     } else if (query.isOverdue === 'false') {
@@ -124,7 +132,7 @@ export class ChargesService extends BaseCrudService {
     return this.tenantCredits.enrichCharge(charge);
   }
 
-  async context(user: AuthUser, roomId?: string, billingPeriodId?: string) {
+  async context(user: AuthUser, roomId?: string, billingPeriodId?: string, roomAreaId?: string) {
     const businessId = requireBusinessId(user);
     const [room, openPeriods, connectedBankAccounts] = await Promise.all([
       roomId
@@ -135,21 +143,40 @@ export class ChargesService extends BaseCrudService {
         : null,
       this.prisma.billingPeriod.findMany({
         where: { businessId, status: BillingPeriodStatus.OPEN },
+        include: { chargeItemConfigs: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } },
         orderBy: [{ year: 'desc' }, { month: 'desc' }],
       }),
       this.connectedBankAccounts(businessId),
     ]);
     if (roomId && !room) throw new BadRequestException('Room not found');
-    const contract = roomId ? await this.findActiveContractForRoom(businessId, roomId) : null;
-    const hasRoomRentCharge = contract && billingPeriodId ? await this.hasRoomRentCharge(businessId, contract.id, billingPeriodId) : false;
+    const [contract, eligibleRooms] = await Promise.all([
+      roomId ? this.findActiveContractForRoom(businessId, roomId) : null,
+      billingPeriodId ? this.findEligibleRoomsForPeriod(businessId, billingPeriodId, roomAreaId) : Promise.resolve([]),
+    ]);
+    const selectedPeriod = billingPeriodId
+      ? await this.prisma.billingPeriod.findFirst({
+          where: { id: billingPeriodId, businessId },
+          include: { chargeItemConfigs: { orderBy: [{ sortOrder: 'asc' }, { createdAt: 'asc' }] } },
+        })
+      : null;
+    const [hasRoomRentCharge, skipRoomRentForDeposit] = contract && selectedPeriod
+      ? await Promise.all([
+          this.hasRoomRentCharge(businessId, contract.id, selectedPeriod.id),
+          this.isRoomRentCoveredByPaidDeposit(businessId, contract, selectedPeriod),
+        ])
+      : [false, false];
     return {
       room,
       contract,
       tenants: contract ? this.currentTenantsForRoom(contract, roomId!) : [],
       openPeriods,
+      selectedPeriod,
+      periodChargeItemConfigs: selectedPeriod?.chargeItemConfigs ?? [],
+      eligibleRooms,
       connectedBankAccounts,
       defaultBankAccount: connectedBankAccounts.find((account) => account.isDefault) ?? connectedBankAccounts[0] ?? null,
       hasRoomRentCharge,
+      skipRoomRentForDeposit,
     };
   }
 
@@ -177,8 +204,12 @@ export class ChargesService extends BaseCrudService {
           items: {
             create: normalized.items.map((item) => ({
               businessId,
+              periodItemConfigId: item.periodItemConfigId,
               chargeType: item.chargeType,
               title: item.title,
+              quantity: item.quantity,
+              unitPrice: item.unitPrice,
+              unitLabel: item.unitLabel,
               amount: item.amount,
               note: item.note,
             })),
@@ -188,7 +219,45 @@ export class ChargesService extends BaseCrudService {
       }),
     );
     await this.changed(user, 'CREATE_CHARGE', charge.id, businessId);
+    await this.billingPeriods.autoLockIfNoUnpaidCharges(charge.billingPeriodId);
     return this.tenantCredits.enrichCharge(charge);
+  }
+
+  private async findEligibleRoomsForPeriod(businessId: string, billingPeriodId: string, roomAreaId?: string) {
+    const todayStart = startOfLocalDay(new Date());
+    const contracts = await this.prisma.rentalContract.findMany({
+      where: {
+        businessId,
+        status: ContractStatus.ACTIVE,
+        OR: [{ endDate: null }, { endDate: { gte: todayStart } }],
+      },
+      include: {
+        room: { include: { roomArea: true } },
+        contractRooms: { include: { room: { include: { roomArea: true } } } },
+      },
+      orderBy: { startDate: 'desc' },
+    });
+    const existingCharges = await this.prisma.charge.findMany({
+      where: { businessId, billingPeriodId, status: { not: ChargeStatus.CANCELLED } },
+      select: { roomId: true },
+    });
+    const chargedRoomIds = new Set(existingCharges.map((charge) => charge.roomId));
+    const rooms = new Map<string, any>();
+    for (const contract of contracts) {
+      const contractRooms = contract.contractRooms.length ? contract.contractRooms.map((item) => item.room) : [contract.room];
+      for (const room of contractRooms) {
+        if (roomAreaId && room.roomAreaId !== roomAreaId) continue;
+        if (chargedRoomIds.has(room.id)) continue;
+        if (rooms.has(room.id)) continue;
+        rooms.set(room.id, {
+          ...room,
+          activeContractId: contract.id,
+          representativeTenantId: contract.representativeTenantId,
+          rentAmount: contract.rentAmount,
+        });
+      }
+    }
+    return Array.from(rooms.values()).sort((left, right) => String(left.roomCode).localeCompare(String(right.roomCode)));
   }
 
   async updateCharge(user: AuthUser, id: string, body: any) {
@@ -223,8 +292,12 @@ export class ChargesService extends BaseCrudService {
             items: {
               create: normalized.items.map((item) => ({
                 businessId: current.businessId,
+                periodItemConfigId: item.periodItemConfigId,
                 chargeType: item.chargeType,
                 title: item.title,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                unitLabel: item.unitLabel,
                 amount: item.amount,
                 note: item.note,
               })),
@@ -234,10 +307,12 @@ export class ChargesService extends BaseCrudService {
         });
       });
       await this.changed(user, 'UPDATE_CHARGE', id, updated.businessId);
+      await this.billingPeriods.autoLockIfNoUnpaidCharges(updated.billingPeriodId);
       return this.tenantCredits.enrichCharge(updated);
     }
     const updated = await super.update('charge', user, id, body);
     await this.changed(user, 'UPDATE_CHARGE', id, updated.businessId);
+    await this.billingPeriods.autoLockIfNoUnpaidCharges(updated.billingPeriodId);
     return this.tenantCredits.enrichCharge(updated);
   }
 
@@ -245,13 +320,20 @@ export class ChargesService extends BaseCrudService {
     const roomId = requiredText(body.roomId, 'Room is required');
     const room = await this.prisma.room.findFirst({ where: { id: roomId, businessId } });
     if (!room) throw new BadRequestException('Room not found');
-    const items = this.normalizeChargeItems(body.items ?? [{ chargeType: body.chargeType, title: body.title, amount: body.amountDue }]);
-    const hasRoomRent = items.some((item) => item.chargeType === ChargeType.ROOM_RENT);
-    const contract = await this.resolveContract(businessId, roomId, body.contractId, hasRoomRent);
     const billingPeriodId = requiredText(body.billingPeriodId, 'Billing period is required');
-    const period = await this.prisma.billingPeriod.findFirst({ where: { id: billingPeriodId, businessId } });
+    const period = await this.prisma.billingPeriod.findFirst({
+      where: { id: billingPeriodId, businessId },
+      include: { chargeItemConfigs: true },
+    });
     if (!period) throw new BadRequestException('Billing period not found');
     if (period.status !== BillingPeriodStatus.OPEN) throw new BadRequestException('Billing period must be open');
+    const rawItems = Array.isArray(body.items) && body.items.length ? body.items : [{ chargeType: body.chargeType, title: body.title, amount: body.amountDue }];
+    const hasRoomRent = rawItems.some((item: any) => (item.chargeType ?? item.code) === ChargeType.ROOM_RENT);
+    const contract = await this.resolveContract(businessId, roomId, body.contractId, hasRoomRent);
+    if (hasRoomRent && contract && await this.isRoomRentCoveredByPaidDeposit(businessId, contract, period)) {
+      throw new BadRequestException('Room rent is covered by paid deposit for this billing period');
+    }
+    const items = this.normalizeChargeItems(rawItems, period.chargeItemConfigs, contract);
     if (hasRoomRent && contract && billingPeriodId) await this.assertRoomRentNotDuplicated(businessId, contract.id, billingPeriodId, body.id);
     const bankAccountId = requiredText(body.bankAccountId, 'Bank account is required');
     const bankAccount = await this.prisma.bankAccount.findFirst({
@@ -274,21 +356,49 @@ export class ChargesService extends BaseCrudService {
       chargeType,
       title: optionalText(body.title) ?? items.map((item) => item.title).join(', '),
       amountDue,
-      dueDate: body.dueDate ? new Date(body.dueDate) : null,
+      dueDate: body.dueDate ? new Date(body.dueDate) : defaultDueDateFromContractPeriod(contract, period),
       items,
     };
   }
 
-  private normalizeChargeItems(value: any[]) {
+  private normalizeChargeItems(value: any[], periodConfigs: any[], contract: any | null) {
     if (!Array.isArray(value) || !value.length) throw new BadRequestException('At least one charge item is required');
+    const configsById = new Map(periodConfigs.map((config) => [config.id, config]));
+    const configsByCode = new Map(periodConfigs.map((config) => [config.code, config]));
     return value.map((item, index) => {
-      const chargeType = item.chargeType as ChargeType;
+      const config = item.periodItemConfigId
+        ? configsById.get(String(item.periodItemConfigId))
+        : item.code
+          ? configsByCode.get(normalizeConfigCode(item.code))
+          : undefined;
+      if (item.periodItemConfigId && !config) throw new BadRequestException(`Billing period charge item config not found at item ${index + 1}`);
+      const rawChargeType = item.chargeType ?? config?.code ?? item.code;
+      const chargeType = normalizeChargeType(rawChargeType);
       if (!Object.values(ChargeType).includes(chargeType)) throw new BadRequestException(`Invalid charge type at item ${index + 1}`);
-      const amount = Number(item.amount ?? item.amountDue);
-      if (!Number.isFinite(amount) || amount < 0) throw new BadRequestException(`Invalid amount at item ${index + 1}`);
+      const amountFallback = item.amount ?? item.amountDue;
+      const quantity =
+        item.quantity === undefined || item.quantity === ''
+          ? amountFallback !== undefined && !item.unitPrice && !item.price
+            ? 1
+            : NaN
+          : Number(String(item.quantity).replace(',', '.'));
+      const unitPrice =
+        chargeType === ChargeType.ROOM_RENT && contract?.rentAmount != null
+          ? Number(contract.rentAmount)
+          : config
+            ? Number(config.unitPrice)
+            : Number(item.unitPrice ?? item.price ?? amountFallback);
+      const amount = roundMoney(quantity * unitPrice);
+      if (!Number.isFinite(quantity) || quantity <= 0) throw new BadRequestException(`Quantity is required at item ${index + 1}`);
+      if (!Number.isFinite(unitPrice) || unitPrice <= 0) throw new BadRequestException(`Unit price is required at item ${index + 1}`);
+      if (!Number.isFinite(amount) || amount <= 0) throw new BadRequestException(`Invalid amount at item ${index + 1}`);
       return {
+        periodItemConfigId: config?.id ?? null,
         chargeType,
-        title: optionalText(item.title) ?? displayChargeType(chargeType),
+        title: optionalText(item.title) ?? config?.title ?? displayChargeType(chargeType),
+        quantity,
+        unitPrice,
+        unitLabel: optionalText(item.unitLabel) ?? config?.unitLabel ?? (chargeType === ChargeType.ROOM_RENT ? 'ky' : null),
         amount,
         note: optionalText(item.note) ?? null,
       };
@@ -336,6 +446,23 @@ export class ChargesService extends BaseCrudService {
       select: { id: true },
     });
     return Boolean(exists);
+  }
+
+  private async isRoomRentCoveredByPaidDeposit(businessId: string, contract: any, period: any) {
+    const depositMonths = Number(contract?.depositMonths ?? 1);
+    const depositAmount = Number(contract?.depositAmount ?? 0);
+    if (!contract?.id || !contract?.startDate || !period || depositMonths < 1 || depositAmount <= 0) return false;
+    if (!billingPeriodCoveredByDeposit(contract.startDate, depositMonths, period)) return false;
+    const paidDepositCharge = await this.prisma.charge.findFirst({
+      where: {
+        businessId,
+        contractId: contract.id,
+        chargeType: ChargeType.DEPOSIT,
+        status: { in: [ChargeStatus.PAID, ChargeStatus.OVERPAID] },
+      },
+      select: { id: true },
+    });
+    return Boolean(paidDepositCharge);
   }
 
   private async connectedBankAccounts(businessId: string) {
@@ -392,6 +519,7 @@ export class ChargesService extends BaseCrudService {
     }
     const updated = await super.update('charge', user, id, { status: ChargeStatus.CANCELLED });
     await this.changed(user, 'CANCEL_CHARGE', id, updated.businessId);
+    await this.billingPeriods.autoLockIfNoUnpaidCharges(updated.billingPeriodId);
     return updated;
   }
 
@@ -459,6 +587,10 @@ function normalizeNumberFilter(value: unknown) {
   return Number.isInteger(parsed) && parsed > 0 ? parsed : undefined;
 }
 
+function normalizeChargeScope(value: unknown) {
+  return value === 'DEPOSIT' || value === 'PERIOD' ? value : undefined;
+}
+
 function isSettledStatus(status: ChargeStatus) {
   return status === ChargeStatus.PAID || status === ChargeStatus.OVERPAID;
 }
@@ -477,4 +609,49 @@ function displayChargeType(type: ChargeType) {
     OTHER: 'Khac',
   };
   return labels[type] ?? String(type);
+}
+
+function normalizeConfigCode(value: unknown) {
+  const text = optionalText(value);
+  if (!text) return '';
+  return text
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toUpperCase()
+    .replace(/[^A-Z0-9]+/g, '_')
+    .replace(/^_+|_+$/g, '');
+}
+
+function normalizeChargeType(value: unknown) {
+  const code = normalizeConfigCode(value);
+  if (Object.values(ChargeType).includes(code as ChargeType)) return code as ChargeType;
+  return ChargeType.OTHER;
+}
+
+function roundMoney(value: number) {
+  return Math.round((value + Number.EPSILON) * 100) / 100;
+}
+
+function billingPeriodCoveredByDeposit(startDateValue: Date, depositMonths: number, period: any) {
+  const startDate = new Date(startDateValue);
+  const month = Number(period?.month);
+  const year = Number(period?.year);
+  if (Number.isNaN(startDate.getTime()) || !Number.isInteger(month) || !Number.isInteger(year)) return false;
+  const startMonthIndex = startDate.getFullYear() * 12 + startDate.getMonth();
+  const periodMonthIndex = year * 12 + (month - 1);
+  return periodMonthIndex >= startMonthIndex + 1 && periodMonthIndex <= startMonthIndex + depositMonths;
+}
+
+function startOfLocalDay(value: Date) {
+  return new Date(value.getFullYear(), value.getMonth(), value.getDate());
+}
+
+function defaultDueDateFromContractPeriod(contract: any | null, period: { startDate: Date } | null) {
+  if (!contract?.paymentDueDay || !period?.startDate) return null;
+  const startDate = new Date(period.startDate);
+  const year = startDate.getFullYear();
+  const month = startDate.getMonth();
+  const lastDay = new Date(year, month + 1, 0).getDate();
+  const dueDay = Math.min(Math.max(Number(contract.paymentDueDay), 1), lastDay);
+  return new Date(year, month, dueDay);
 }

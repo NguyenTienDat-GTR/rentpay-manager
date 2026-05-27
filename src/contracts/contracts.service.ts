@@ -1,5 +1,5 @@
 ﻿import { BadRequestException, Injectable } from '@nestjs/common';
-import { ChargeStatus, ChargeType, ContractStatus, OccupantStatus, OccupantType, Prisma, RoomStatus, TenantStatus } from '@prisma/client';
+import { ChargeStatus, ChargeType, ContractStatus, OccupantStatus, OccupantType, PaymentCycle, Prisma, RoomStatus, TenantStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
 import { BaseCrudService } from '../common/base-crud.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
@@ -57,7 +57,10 @@ export class ContractsService extends BaseCrudService {
     this.assertOccupantCapacity(rooms, occupants);
     const effective = isEffectiveActiveContract(status, startDate);
     const rentAmount = body.rentAmount ?? sumMoney(rooms.map((room) => room.baseRentAmount));
-    const depositAmount = body.depositAmount ?? 0;
+    const hasDeposit = body.hasDeposit === undefined ? Number(body.depositAmount ?? 0) > 0 : Boolean(body.hasDeposit);
+    const depositMonths = hasDeposit ? this.normalizeDepositMonths(body.depositMonths ?? 1) : 1;
+    const depositAmount = hasDeposit ? Number(body.depositAmount ?? rentAmount) : 0;
+    if (hasDeposit && (!Number.isFinite(depositAmount) || depositAmount <= 0)) throw new BadRequestException('Deposit amount must be greater than 0');
     const paymentDueDay = this.normalizePaymentDueDay(body.paymentDueDay ?? startDate.getDate());
 
     const contract = await this.prisma.$transaction(async (tx) => {
@@ -82,7 +85,8 @@ export class ContractsService extends BaseCrudService {
           endDate,
           rentAmount,
           depositAmount,
-          paymentCycle: body.paymentCycle ?? 'MONTHLY',
+          depositMonths,
+          paymentCycle: this.normalizePaymentCycle(body.paymentCycle),
           paymentDueDay,
           status,
           note: body.note,
@@ -250,8 +254,9 @@ export class ContractsService extends BaseCrudService {
           startDate: transferDate,
           endDate: newContractEndDate,
           rentAmount: body.rentAmount ?? sumMoney(newRooms.map((room) => room.baseRentAmount)),
-          depositAmount: body.depositAmount ?? 0,
-          paymentCycle: body.paymentCycle ?? oldContract.paymentCycle,
+          depositAmount: (body.hasDeposit === undefined ? Number(body.depositAmount ?? 0) > 0 : Boolean(body.hasDeposit)) ? Number(body.depositAmount ?? body.rentAmount ?? sumMoney(newRooms.map((room) => room.baseRentAmount))) : 0,
+          depositMonths: (body.hasDeposit === undefined ? Number(body.depositAmount ?? 0) > 0 : Boolean(body.hasDeposit)) ? this.normalizeDepositMonths(body.depositMonths ?? 1) : 1,
+          paymentCycle: this.normalizePaymentCycle(body.paymentCycle),
           paymentDueDay: Number(body.paymentDueDay ?? oldContract.paymentDueDay),
           status: ContractStatus.ACTIVE,
           note: body.note,
@@ -572,7 +577,23 @@ export class ContractsService extends BaseCrudService {
   private async createDepositChargeIfNeeded(tx: any, businessId: string, contract: any) {
     const depositAmount = Number(contract.depositAmount ?? 0);
     if (depositAmount <= 0) return null;
-    const bankAccount = await tx.bankAccount.findFirst({ where: { businessId, isDefault: true, status: 'ACTIVE' } });
+    const depositMonths = this.normalizeDepositMonths(contract.depositMonths ?? 1);
+    const totalDepositAmount = depositAmount * depositMonths;
+    const bankAccount =
+      (await tx.bankAccount.findFirst({
+        where: { businessId, isDefault: true, status: 'ACTIVE', connections: { some: { status: 'CONNECTED' } } },
+      })) ??
+      (await tx.bankAccount.findFirst({
+        where: { businessId, status: 'ACTIVE', connections: { some: { status: 'CONNECTED' } } },
+        orderBy: { createdAt: 'desc' },
+      })) ??
+      (await tx.bankAccount.findFirst({
+        where: { businessId, isDefault: true, status: 'ACTIVE' },
+      })) ??
+      (await tx.bankAccount.findFirst({
+        where: { businessId, status: 'ACTIVE' },
+        orderBy: { createdAt: 'desc' },
+      }));
     if (!bankAccount) throw new BadRequestException('Default active bank account is required to create deposit charge');
     const exists = await tx.charge.findFirst({ where: { businessId, contractId: contract.id, chargeType: ChargeType.DEPOSIT } });
     if (exists) return exists;
@@ -586,8 +607,8 @@ export class ContractsService extends BaseCrudService {
         bankAccountId: bankAccount.id,
         chargeType: ChargeType.DEPOSIT,
         title: 'Tien coc hop dong thue',
-        amountDue: depositAmount,
-        dueDate: contract.startDate,
+        amountDue: totalDepositAmount,
+        dueDate: depositDueDate(contract.startDate),
         paymentCode,
         transferContent: buildTransferContent(ChargeType.DEPOSIT, paymentCode),
         items: {
@@ -595,7 +616,10 @@ export class ContractsService extends BaseCrudService {
             businessId,
             chargeType: ChargeType.DEPOSIT,
             title: 'Tien coc',
-            amount: depositAmount,
+            quantity: depositMonths,
+            unitPrice: depositAmount,
+            unitLabel: 'thang',
+            amount: totalDepositAmount,
           },
         },
       },
@@ -672,7 +696,9 @@ export class ContractsService extends BaseCrudService {
 
   private normalizeContractStatus(value: unknown) {
     if (!Object.values(ContractStatus).includes(value as ContractStatus)) throw new BadRequestException('Invalid contract status');
-    return value as ContractStatus;
+    const status = value as ContractStatus;
+    if (status !== ContractStatus.PENDING && status !== ContractStatus.ACTIVE) throw new BadRequestException('Contract status must be pending or active when creating a contract');
+    return status;
   }
 
   private normalizeOccupantType(value: unknown) {
@@ -766,6 +792,17 @@ export class ContractsService extends BaseCrudService {
     const day = Number(value);
     if (!Number.isInteger(day) || day < 1 || day > 31) throw new BadRequestException('Payment due day must be from 1 to 31');
     return day;
+  }
+
+  private normalizePaymentCycle(value: unknown) {
+    if (value === undefined || value === null || value === '' || value === PaymentCycle.MONTHLY) return PaymentCycle.MONTHLY;
+    throw new BadRequestException('Only monthly payment cycle is supported');
+  }
+
+  private normalizeDepositMonths(value: unknown) {
+    const months = Number(value);
+    if (!Number.isInteger(months) || months < 1 || months > 6) throw new BadRequestException('Deposit months must be from 1 to 6');
+    return months;
   }
 
   private async changed(user: AuthUser, action: string, id: string, businessId: string) {
@@ -946,4 +983,11 @@ function addDays(date: Date, days: number) {
   const next = new Date(date);
   next.setDate(next.getDate() + days);
   return next;
+}
+
+function depositDueDate(startDate: Date) {
+  const start = startOfLocalDay(startDate);
+  const today = startOfLocalDay(new Date());
+  if (start.getTime() <= today.getTime()) return today;
+  return addDays(start, -1);
 }

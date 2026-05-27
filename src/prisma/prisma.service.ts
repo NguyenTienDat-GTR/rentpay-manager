@@ -6,6 +6,8 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
   async onModuleInit() {
     await this.$connect();
     await this.ensureChargeItemsTable();
+    await this.ensureBillingPeriodChargeItemConfigSchema();
+    await this.ensureRentalContractDepositSchema();
     await this.ensureRoomAreasSchema();
     await this.ensureBillingPeriodCreatorSchema();
     await this.ensureTenantCreditLedgerSchema();
@@ -42,6 +44,12 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
     `);
     await this.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "ChargeItem_businessId_chargeType_idx" ON "ChargeItem"("businessId", "chargeType")`);
     await this.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "ChargeItem_chargeId_idx" ON "ChargeItem"("chargeId")`);
+    await this.$executeRawUnsafe(`ALTER TABLE "ChargeItem" ADD COLUMN IF NOT EXISTS "periodItemConfigId" TEXT`);
+    await this.$executeRawUnsafe(`ALTER TABLE "ChargeItem" ADD COLUMN IF NOT EXISTS "quantity" DECIMAL(14,2) NOT NULL DEFAULT 1`);
+    await this.$executeRawUnsafe(`ALTER TABLE "ChargeItem" ADD COLUMN IF NOT EXISTS "unitPrice" DECIMAL(14,2) NOT NULL DEFAULT 0`);
+    await this.$executeRawUnsafe(`ALTER TABLE "ChargeItem" ADD COLUMN IF NOT EXISTS "unitLabel" TEXT`);
+    await this.$executeRawUnsafe(`UPDATE "ChargeItem" SET "unitPrice" = "amount" WHERE "unitPrice" = 0`);
+    await this.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "ChargeItem_periodItemConfigId_idx" ON "ChargeItem"("periodItemConfigId")`);
     await this.$executeRawUnsafe(`
       DO $$
       BEGIN
@@ -58,6 +66,60 @@ export class PrismaService extends PrismaClient implements OnModuleInit, OnModul
         END IF;
       END $$
     `);
+  }
+
+  private async ensureBillingPeriodChargeItemConfigSchema() {
+    await this.$executeRawUnsafe(`ALTER TYPE "NotificationAction" ADD VALUE IF NOT EXISTS 'BILLING_PERIOD_AUTO_LOCKED'`);
+    await this.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "BillingPeriodChargeItemConfig" (
+        "id" TEXT NOT NULL,
+        "businessId" TEXT NOT NULL,
+        "billingPeriodId" TEXT NOT NULL,
+        "code" TEXT NOT NULL,
+        "title" TEXT NOT NULL,
+        "unitLabel" TEXT NOT NULL,
+        "unitPrice" DECIMAL(14,2) NOT NULL,
+        "isDefault" BOOLEAN NOT NULL DEFAULT false,
+        "sortOrder" INTEGER NOT NULL DEFAULT 0,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updatedAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "BillingPeriodChargeItemConfig_pkey" PRIMARY KEY ("id")
+      )
+    `);
+    await this.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS "BillingPeriodChargeItemConfig_billingPeriodId_code_key" ON "BillingPeriodChargeItemConfig"("billingPeriodId", "code")`);
+    await this.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "BillingPeriodChargeItemConfig_businessId_idx" ON "BillingPeriodChargeItemConfig"("businessId")`);
+    await this.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "BillingPeriodChargeItemConfig_billingPeriodId_idx" ON "BillingPeriodChargeItemConfig"("billingPeriodId")`);
+    const constraints = [
+      [
+        'BillingPeriodChargeItemConfig',
+        'BillingPeriodChargeItemConfig_businessId_fkey',
+        'FOREIGN KEY ("businessId") REFERENCES "Business"("id") ON DELETE RESTRICT ON UPDATE CASCADE',
+      ],
+      [
+        'BillingPeriodChargeItemConfig',
+        'BillingPeriodChargeItemConfig_billingPeriodId_fkey',
+        'FOREIGN KEY ("billingPeriodId") REFERENCES "BillingPeriod"("id") ON DELETE CASCADE ON UPDATE CASCADE',
+      ],
+      [
+        'ChargeItem',
+        'ChargeItem_periodItemConfigId_fkey',
+        'FOREIGN KEY ("periodItemConfigId") REFERENCES "BillingPeriodChargeItemConfig"("id") ON DELETE SET NULL ON UPDATE CASCADE',
+      ],
+    ];
+    for (const [table, name, definition] of constraints) {
+      await this.$executeRawUnsafe(`
+        DO $$
+        BEGIN
+          IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = '${name}') THEN
+            ALTER TABLE "${table}" ADD CONSTRAINT "${name}" ${definition};
+          END IF;
+        END $$
+      `);
+    }
+  }
+
+  private async ensureRentalContractDepositSchema() {
+    await this.$executeRawUnsafe(`ALTER TABLE "RentalContract" ADD COLUMN IF NOT EXISTS "depositMonths" INTEGER NOT NULL DEFAULT 1`);
   }
 
   private async ensureRoomAreasSchema() {

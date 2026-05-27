@@ -1,18 +1,24 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import {
   BankAccountStatus,
+  ChargeType,
   ChargeStatus,
+  ContractStatus,
   CreditLedgerStatus,
   CreditLedgerType,
+  OccupantStatus,
   PaymentMethod,
   PaymentStatus,
   Prisma,
   RefundMethod,
+  RoomStatus,
+  TenantStatus,
   TenantCreditActivityStatus,
   TenantCreditActivityType,
   TransactionType,
 } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
+import { BillingPeriodsService } from '../billing-periods/billing-periods.service';
 import { BaseCrudService } from '../common/base-crud.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { scopedWhere } from '../common/utils/business-scope';
@@ -30,6 +36,7 @@ export class TenantCreditsService extends BaseCrudService {
     private readonly audit: AuditService,
     private readonly redis: RedisService,
     private readonly realtime: RealtimeService,
+    private readonly billingPeriods: BillingPeriodsService,
   ) {
     super(prisma);
   }
@@ -140,6 +147,7 @@ export class TenantCreditsService extends BaseCrudService {
       targetChargeId,
       amount: body.amount,
     });
+    await this.billingPeriods.autoLockIfNoUnpaidCharges(result.targetCharge?.billingPeriodId);
     return result;
   }
 
@@ -402,7 +410,51 @@ export class TenantCreditsService extends BaseCrudService {
             : ChargeStatus.PAID;
 
     const updated = await client.charge.update({ where: { id: chargeId }, data: { amountPaid, status } });
+    await this.activateContractAfterPaidDeposit(client, updated);
     return { ...updated, ...credit, remainingAmount: remainingAmount(updated) };
+  }
+
+  private async activateContractAfterPaidDeposit(client: DbClient, charge: any) {
+    if (charge.chargeType !== ChargeType.DEPOSIT || ![ChargeStatus.PAID, ChargeStatus.OVERPAID].includes(charge.status) || !charge.contractId) return;
+    const contract = await client.rentalContract.findUnique({
+      where: { id: charge.contractId },
+      include: {
+        occupants: true,
+        contractRooms: { include: { room: true } },
+        room: true,
+      },
+    });
+    if (!contract || contract.status === ContractStatus.ACTIVE) return;
+
+    const rooms = contract.contractRooms.length ? contract.contractRooms.map((item) => item.room) : [contract.room];
+    const effective = startOfLocalDay(contract.startDate).getTime() <= startOfLocalDay(new Date()).getTime();
+    await client.rentalContract.update({ where: { id: contract.id }, data: { status: ContractStatus.ACTIVE } });
+    await client.tenant.update({
+      where: { id: contract.representativeTenantId },
+      data: { status: effective ? TenantStatus.STAYING : TenantStatus.DEPOSITED },
+    });
+    await client.contractOccupant.updateMany({
+      where: { contractId: contract.id, status: { not: OccupantStatus.LEFT } },
+      data: { status: effective ? OccupantStatus.STAYING : OccupantStatus.DEPOSITED },
+    });
+    if (!effective) {
+      await client.room.updateMany({ where: { id: { in: rooms.map((room) => room.id) } }, data: { status: RoomStatus.DEPOSITED, currentOccupantCount: 0 } });
+      return;
+    }
+
+    const counts = new Map<string, number>();
+    for (const room of rooms) counts.set(room.id, room.id === contract.roomId ? 1 : 0);
+    for (const occupant of contract.occupants) {
+      if (occupant.status === OccupantStatus.LEFT) continue;
+      const roomId = occupant.roomId ?? contract.roomId;
+      counts.set(roomId, (counts.get(roomId) ?? 0) + 1);
+    }
+    for (const room of rooms) {
+      await client.room.update({
+        where: { id: room.id },
+        data: { status: RoomStatus.OCCUPIED, currentOccupantCount: counts.get(room.id) ?? 0 },
+      });
+    }
   }
 
   private async syncOverpaymentLedger(client: DbClient, charge: any, payment: any, overpayment: number) {
@@ -629,6 +681,10 @@ function roundMoney(value: number) {
 
 function sameMoney(left: number, right: number) {
   return Math.round(left * 100) === Math.round(right * 100);
+}
+
+function startOfLocalDay(date: Date) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate());
 }
 
 function makeActivityCode(type: TenantCreditActivityType) {
