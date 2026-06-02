@@ -657,12 +657,25 @@ function startOfLocalDay(value: Date) {
   return new Date(value.getFullYear(), value.getMonth(), value.getDate());
 }
 
-function defaultDueDateFromContractPeriod(contract: any | null, period: { startDate: Date } | null) {
+function defaultDueDateFromContractPeriod(contract: any | null, period: { startDate: Date; endDate?: Date | null } | null) {
   if (!contract?.paymentDueDay || !period?.startDate) return null;
   const startDate = new Date(period.startDate);
-  const year = startDate.getFullYear();
-  const month = startDate.getMonth();
+  const endDate = period.endDate ? new Date(period.endDate) : startDate;
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime())) return null;
+  const dueDay = Math.max(Number(contract.paymentDueDay), 1);
+  let cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+  const lastMonth = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+  while (cursor.getTime() <= lastMonth.getTime()) {
+    const candidate = dueDateInMonth(cursor.getFullYear(), cursor.getMonth(), dueDay);
+    if (candidate.getTime() >= startOfLocalDay(startDate).getTime() && candidate.getTime() <= startOfLocalDay(endDate).getTime()) {
+      return candidate;
+    }
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth() + 1, 1);
+  }
+  return dueDateInMonth(endDate.getFullYear(), endDate.getMonth(), dueDay);
+}
+
+function dueDateInMonth(year: number, month: number, dueDay: number) {
   const lastDay = new Date(year, month + 1, 0).getDate();
-  const dueDay = Math.min(Math.max(Number(contract.paymentDueDay), 1), lastDay);
-  return new Date(year, month, dueDay);
+  return new Date(year, month, Math.min(dueDay, lastDay));
 }

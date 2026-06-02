@@ -56,7 +56,7 @@ export class BillingPeriodsService extends BaseCrudService implements OnModuleIn
 
   async list(user: AuthUser, query: any) {
     await this.syncExpiredPeriods(user, typeof query.businessId === 'string' ? query.businessId : undefined);
-    return super.listItems({
+    const result = await super.listItems({
       model: 'billingPeriod',
       user,
       query,
@@ -65,10 +65,11 @@ export class BillingPeriodsService extends BaseCrudService implements OnModuleIn
       sortFields: ['year', 'month', 'status', 'createdAt'],
       include: BILLING_PERIOD_INCLUDE,
     });
+    return { ...result, items: await this.withChargeStatusCounts(result.items) };
   }
 
   async getPeriod(user: AuthUser, id: string) {
-    return this.requirePeriod(user, id);
+    return this.withChargeStatusCounts(await this.requirePeriod(user, id));
   }
 
   async createPeriod(user: AuthUser, body: any) {
@@ -367,6 +368,30 @@ export class BillingPeriodsService extends BaseCrudService implements OnModuleIn
   private async requirePeriod(user: AuthUser, id: string) {
     const period = await this.get('billingPeriod', user, id, BILLING_PERIOD_INCLUDE);
     return this.closeExpiredPeriodIfNeeded(period);
+  }
+
+  private async withChargeStatusCounts<T extends any | any[]>(periodOrPeriods: T): Promise<T> {
+    const periods = Array.isArray(periodOrPeriods) ? periodOrPeriods : [periodOrPeriods];
+    const periodIds = periods.map((period) => period?.id).filter(Boolean);
+    if (!periodIds.length) return periodOrPeriods;
+    const grouped = await this.prisma.charge.groupBy({
+      by: ['billingPeriodId', 'status'],
+      where: { billingPeriodId: { in: periodIds } },
+      _count: { _all: true },
+    });
+    const countsByPeriod = new Map<string, Record<string, number>>();
+    for (const item of grouped) {
+      if (!item.billingPeriodId) continue;
+      const counts = countsByPeriod.get(item.billingPeriodId) ?? {};
+      counts[item.status] = item._count._all;
+      countsByPeriod.set(item.billingPeriodId, counts);
+    }
+    const enriched = periods.map((period) => {
+      const chargeStatusCounts = countsByPeriod.get(period.id) ?? {};
+      const chargeCount = Object.values(chargeStatusCounts).reduce((sum, count) => sum + Number(count ?? 0), 0);
+      return { ...period, chargeStatusCounts, chargeCount };
+    });
+    return (Array.isArray(periodOrPeriods) ? enriched : enriched[0]) as T;
   }
 
   private async closeExpiredPeriodIfNeeded(period: any) {
