@@ -108,7 +108,7 @@ function makeService({ match = makeMatch(), charge = makeCharge(), suggestedChar
   const redis = { del: async () => undefined } as any;
   const realtime = { emitBusiness: () => undefined } as any;
   const tenantCredits = { recalculateCharge: async () => ({ ...charge, status: ChargeStatus.PAID, amountPaid: charge.amountDue }) } as any;
-  const service = new BankTransactionsService(prisma, {} as any, audit, redis, realtime, tenantCredits);
+  const service = new BankTransactionsService(prisma, {} as any, audit, redis, realtime, tenantCredits, { autoLockIfNoUnpaidCharges: async () => null } as any);
   return { service, calls };
 }
 
@@ -190,7 +190,7 @@ describe('Payment match manual review', () => {
     const audit = { log: async (payload: any) => calls.audits.push(payload) } as any;
     const redis = { del: async () => undefined } as any;
     const realtime = { emitBusiness: () => undefined } as any;
-    const service = new BankTransactionsService(prisma, payments, audit, redis, realtime, {} as any);
+    const service = new BankTransactionsService(prisma, payments, audit, redis, realtime, {} as any, { autoLockIfNoUnpaidCharges: async () => null } as any);
 
     const result = await service.receiveWebhook({
       bankCode: 'VCB',

@@ -160,6 +160,7 @@ enum NotificationAction {
   PUBLIC_LOOKUP
   PUBLIC_QR_VIEWED
   PUBLIC_TRANSFER_CONTENT_COPIED
+  BILLING_PERIOD_AUTO_LOCKED
 }
 
 model User {
@@ -221,6 +222,7 @@ model Business {
   contractRooms    RentalContractRoom[]
   occupants        ContractOccupant[]
   billingPeriods   BillingPeriod[]
+  billingPeriodChargeItemConfigs BillingPeriodChargeItemConfig[]
   charges          Charge[]
   chargeItems      ChargeItem[]
   payments         Payment[]
@@ -351,6 +353,7 @@ model RentalContract {
   reason                 Json?
   rentAmount             Decimal            @db.Decimal(14, 2)
   depositAmount          Decimal            @db.Decimal(14, 2)
+  depositMonths          Int                @default(1)
   paymentCycle           PaymentCycle       @default(MONTHLY)
   paymentDueDay          Int
   status                 ContractStatus     @default(PENDING)
@@ -424,11 +427,33 @@ model BillingPeriod {
   updatedAt DateTime            @updatedAt
   business  Business            @relation(fields: [businessId], references: [id])
   creator   User?               @relation("BillingPeriodCreator", fields: [createdBy], references: [id])
+  chargeItemConfigs BillingPeriodChargeItemConfig[]
   charges   Charge[]
 
   @@unique([businessId, month, year])
   @@index([businessId, status])
   @@index([createdBy])
+}
+
+model BillingPeriodChargeItemConfig {
+  id              String        @id @default(cuid())
+  businessId      String
+  billingPeriodId String
+  code            String
+  title           String
+  unitLabel       String
+  unitPrice       Decimal       @db.Decimal(14, 2)
+  isDefault       Boolean       @default(false)
+  sortOrder       Int           @default(0)
+  createdAt       DateTime      @default(now())
+  updatedAt       DateTime      @updatedAt
+  business        Business      @relation(fields: [businessId], references: [id])
+  billingPeriod   BillingPeriod @relation(fields: [billingPeriodId], references: [id], onDelete: Cascade)
+  chargeItems     ChargeItem[]
+
+  @@unique([billingPeriodId, code])
+  @@index([businessId])
+  @@index([billingPeriodId])
 }
 
 model Charge {
@@ -474,17 +499,23 @@ model ChargeItem {
   id          String     @id @default(cuid())
   businessId  String
   chargeId    String
+  periodItemConfigId String?
   chargeType  ChargeType
   title       String
+  quantity    Decimal    @default(1) @db.Decimal(14, 2)
+  unitPrice   Decimal    @default(0) @db.Decimal(14, 2)
+  unitLabel   String?
   amount      Decimal    @db.Decimal(14, 2)
   note        String?
   createdAt   DateTime   @default(now())
   updatedAt   DateTime   @updatedAt
   business    Business   @relation(fields: [businessId], references: [id])
   charge      Charge     @relation(fields: [chargeId], references: [id], onDelete: Cascade)
+  periodItemConfig BillingPeriodChargeItemConfig? @relation(fields: [periodItemConfigId], references: [id], onDelete: SetNull)
 
   @@index([businessId, chargeType])
   @@index([chargeId])
+  @@index([periodItemConfigId])
 }
 
 model Payment {

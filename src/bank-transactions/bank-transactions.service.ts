@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ChargeStatus, PaymentMatchStatus, PaymentMethod, PaymentStatus, TransactionClassification, TransactionType } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
+import { BillingPeriodsService } from '../billing-periods/billing-periods.service';
 import { BaseCrudService } from '../common/base-crud.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
@@ -18,6 +19,7 @@ export class BankTransactionsService extends BaseCrudService {
     private readonly redis: RedisService,
     private readonly realtime: RealtimeService,
     private readonly tenantCredits: TenantCreditsService,
+    private readonly billingPeriods: BillingPeriodsService,
   ) {
     super(prisma);
   }
@@ -126,6 +128,7 @@ export class BankTransactionsService extends BaseCrudService {
     });
 
     const updatedCharge = await this.tenantCredits.recalculateCharge(charge.id);
+    await this.billingPeriods.autoLockIfNoUnpaidCharges(updatedCharge?.billingPeriodId);
     await this.redis.del(`dashboard:${result.businessId}:*`);
     await this.audit.log({
       businessId: result.businessId,

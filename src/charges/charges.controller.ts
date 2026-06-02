@@ -16,8 +16,13 @@ export class ChargesController {
 
   @Get('context')
   @Retryable()
-  context(@CurrentUser() user: AuthUser, @Query('roomId') roomId?: string, @Query('billingPeriodId') billingPeriodId?: string) {
-    return this.charges.context(user, roomId, billingPeriodId);
+  context(
+    @CurrentUser() user: AuthUser,
+    @Query('roomId') roomId?: string,
+    @Query('billingPeriodId') billingPeriodId?: string,
+    @Query('roomAreaId') roomAreaId?: string,
+  ) {
+    return this.charges.context(user, roomId, billingPeriodId, roomAreaId);
   }
 
   @Get(':id')

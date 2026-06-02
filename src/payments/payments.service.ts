@@ -1,6 +1,7 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { ChargeStatus, PaymentMethod, PaymentStatus } from '@prisma/client';
 import { AuditService } from '../audit/audit.service';
+import { BillingPeriodsService } from '../billing-periods/billing-periods.service';
 import { BaseCrudService } from '../common/base-crud.service';
 import { AuthUser } from '../common/decorators/current-user.decorator';
 import { PrismaService } from '../prisma/prisma.service';
@@ -16,6 +17,7 @@ export class PaymentsService extends BaseCrudService {
     private readonly redis: RedisService,
     private readonly realtime: RealtimeService,
     private readonly tenantCredits: TenantCreditsService,
+    private readonly billingPeriods: BillingPeriodsService,
   ) {
     super(prisma);
   }
@@ -51,6 +53,7 @@ export class PaymentsService extends BaseCrudService {
       },
     });
     const updatedCharge = await this.tenantCredits.recalculateCharge(charge.id);
+    await this.billingPeriods.autoLockIfNoUnpaidCharges(charge.billingPeriodId);
     await this.afterPaymentChanged(user, charge.businessId, 'RECORD_CASH_PAYMENT', payment.id, { chargeId: charge.id });
     return { payment, charge: updatedCharge };
   }
@@ -62,6 +65,7 @@ export class PaymentsService extends BaseCrudService {
     const updated = await this.prisma.payment.update({ where: { id }, data: { status: PaymentStatus.CANCELLED } });
     for (const sourceChargeId of sourceChargeIds) await this.tenantCredits.recalculateCharge(sourceChargeId);
     const charge = await this.tenantCredits.recalculateCharge(payment.chargeId);
+    await this.billingPeriods.autoLockIfNoUnpaidCharges(charge?.billingPeriodId);
     await this.afterPaymentChanged(user, payment.businessId, 'CANCEL_PAYMENT', id, { chargeId: payment.chargeId });
     return { payment: updated, charge };
   }
@@ -84,6 +88,7 @@ export class PaymentsService extends BaseCrudService {
       },
     });
     const updatedCharge = await this.tenantCredits.recalculateCharge(charge.id);
+    await this.billingPeriods.autoLockIfNoUnpaidCharges(charge.billingPeriodId);
     await this.redis.del(`dashboard:${charge.businessId}:*`);
     this.realtime.emitBusiness(charge.businessId, 'payment.changed', { payment, charge: updatedCharge });
     return { payment, charge: updatedCharge };

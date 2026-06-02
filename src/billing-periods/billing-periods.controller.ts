@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Param, Patch, Post, Query } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Param, Patch, Post, Query } from '@nestjs/common';
 import { BillingPeriodStatus } from '@prisma/client';
 import { CurrentUser, AuthUser } from '../common/decorators/current-user.decorator';
 import { Retryable } from '../common/decorators/retryable.decorator';
@@ -38,5 +38,15 @@ export class BillingPeriodsController {
   @Post(':id/generate-monthly-rent')
   generate(@CurrentUser() user: AuthUser, @Param('id') id: string) {
     return this.periods.generateMonthlyRentCharges(user, id);
+  }
+
+  @Delete(':id/charges')
+  deleteUnpaidCharges(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.periods.deleteUnpaidCharges(user, id);
+  }
+
+  @Delete(':id')
+  delete(@CurrentUser() user: AuthUser, @Param('id') id: string) {
+    return this.periods.deletePeriod(user, id);
   }
 }
