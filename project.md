@@ -352,11 +352,11 @@ Tất cả endpoint bên dưới có prefix `/api`.
 - `GET /dashboard/summary`
   - Query range: `fromDate/toDate`, hoặc `periodType=year|quarter|month`, `year`, `quarter`, `month`.
   - Response gồm tổng phòng, phòng occupied/deposited/available/maintenance, current occupants, active contracts, totalDue/Collected/Debt, cash/bank collected, creditApplied, creditBalance, overpaidAmount, suspicious/other transactions, overdue, recentTransactions, debtByRoom.
-- `GET /reports/collection-summary`: tổng charge/payment theo method, thêm `totalCollected`, `creditBalance`, `overpaidAmount`.
-- `GET /reports/debt`: charge còn nợ, có `remainingAmount`, `creditBalance`, `overpaidAmount`.
-- `GET /reports/payments`: danh sách payment.
-- `GET /reports/bank-transactions`: danh sách bank transaction.
-- `GET /reports/export-excel`: tải `rentpay-report.xlsx`, rate-limit 10/phút.
+- `GET /reports/collection-summary`: tổng charge/payment theo method, hỗ trợ filter thời gian giống dashboard (`periodType`, `month`, `quarter`, `year`, `fromDate`, `toDate`), tính cả charge/payment tiền cọc (`DEPOSIT`), trả thêm `totalCollected`, `totalDebt`, `depositCollected`, `chargeTypeBreakdown`, `methodBreakdown`, `timeline`, `comparison`, `creditBalance`, `overpaidAmount`, và `analytics` cho phòng, người thuê, hợp đồng, khoản thu, thanh toán, giao dịch ngân hàng, đối soát, hoàn tiền/credit. `chargeTypeBreakdown` là nguồn cho biểu đồ hiệu suất thu theo loại khoản, gồm số cần thu và đã thu của từng loại khoản.
+- `GET /reports/debt`: charge còn nợ, có `remainingAmount`, `creditBalance`, `overpaidAmount`, hỗ trợ filter thời gian.
+- `GET /reports/payments`: danh sách payment, hỗ trợ filter thời gian, `paymentMethod`, `status`.
+- `GET /reports/bank-transactions`: danh sách bank transaction, hỗ trợ filter thời gian.
+- `GET /reports/export-excel`: tải file Excel báo cáo tiếng Việt, nhận cùng filter báo cáo, rate-limit 10/phút. Workbook gồm các sheet `Tổng hợp`, `Thống kê vận hành`, `Cơ cấu khoản thu`, `Tình trạng khoản thu`, `Công nợ`, `Thanh toán`, `Đối soát ngân hàng`, `Hợp đồng`, `Phòng và người thuê`, `Hoàn tiền và credit`; mỗi sheet có tiêu đề báo cáo, ngày xuất, header tiếng Việt, kẻ bảng, filter, freeze header, format tiền/ngày.
 - `GET /audit-logs`: list audit. Filter `action`, `entity`, `userId`. SUPER_ADMIN xem cross-business, business user bị scope.
 - `GET /audit-logs/payments`: audit entity Payment.
 - `GET /notification-logs`: list notification. Filter `action`, `createdBy`.
